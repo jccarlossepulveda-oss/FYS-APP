@@ -9,6 +9,7 @@ export default function App({ usuario, rol, onLogout }) {
   const [viajes, setViajes] = useState([])
   const [facturas, setFacturas] = useState([])
   const [gasolina, setGasolina] = useState([])
+  const [usuarios, setUsuarios] = useState([])
   const [modal, setModal] = useState(null)
   const [confirmar, setConfirmar] = useState(null)
   const [form, setForm] = useState({})
@@ -21,7 +22,6 @@ export default function App({ usuario, rol, onLogout }) {
 
   async function load() {
     if (rol === 'chofer') {
-      // El chofer solo carga lo suyo — RLS filtra viajes automáticamente
       const [a, b, c] = await Promise.all([
         supabase.from('camiones').select('*').order('economico'),
         supabase.from('choferes').select('*').order('nombre'),
@@ -46,49 +46,43 @@ export default function App({ usuario, rol, onLogout }) {
     }
   }
 
+  async function loadUsuarios() {
+    const { data } = await supabase.rpc('get_users_emails')
+    if (data) setUsuarios(data)
+  }
+
   async function eliminar(tabla, id, msg) {
     setConfirmar({ msg, fn: async () => { await supabase.from(tabla).delete().eq('id', id); await load(); setConfirmar(null) } })
   }
 
   async function crearChofer() {
-    if (!form.nombre || !form.email || !form.password) {
-      alert('Nombre, email y contraseña son requeridos')
+    if (!form.nombre || !form.user_id) {
+      alert('Nombre y usuario son requeridos')
       return
     }
     setLoading(true)
     try {
-      // 1. Crear usuario en Auth con signUp (sin service key)
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: form.email,
-        password: form.password,
-        options: { data: { nombre: form.nombre, rol: 'chofer' } }
-      })
-      if (authError) throw authError
-      const userId = authData.user.id
-
-      // 2. Insertar en choferes con user_id vinculado
       const { error: choferError } = await supabase.from('choferes').insert([{
         nombre: form.nombre,
         telefono: form.telefono || null,
         licencia: form.licencia || null,
         licencia_vence: form.licencia_vence || null,
-        user_id: userId,
+        user_id: form.user_id,
         activo: true
       }])
       if (choferError) throw choferError
 
-      // 3. Insertar en perfiles con rol chofer
-      const { error: perfilError } = await supabase.from('perfiles').insert([{
-        id: userId,
+      const usuarioSeleccionado = usuarios.find(u => u.id === form.user_id)
+      await supabase.from('perfiles').upsert([{
+        id: form.user_id,
         nombre: form.nombre,
         rol: 'chofer'
       }])
-      if (perfilError) throw perfilError
 
       await load()
       setModal(null)
       setForm({})
-      alert('✓ Chofer creado. Ya puede iniciar sesión con ' + form.email)
+      alert('✓ Chofer creado y vinculado con ' + (usuarioSeleccionado?.email || ''))
     } catch (e) {
       alert('Error: ' + e.message)
     }
@@ -123,7 +117,6 @@ export default function App({ usuario, rol, onLogout }) {
   const fF = filtroF === 'todas' ? facturas : facturas.filter(f => f.estatus === filtroF)
   const totalGas = gasolina.reduce((a, g) => a + Number(g.monto || 0), 0)
 
-  // ─── VISTA CHOFER ───────────────────────────────────────────────────────────
   if (rol === 'chofer') {
     return (
       <div style={{ minHeight: '100vh', background: '#F7F7F6', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b, paddingBottom: 70 }}>
@@ -201,7 +194,6 @@ export default function App({ usuario, rol, onLogout }) {
     )
   }
 
-  // ─── VISTA ADMIN ────────────────────────────────────────────────────────────
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b, background: '#F7F7F6' }}>
       <div style={{ width: 190, flexShrink: 0, background: w, borderRight: br, display: 'flex', flexDirection: 'column' }}>
@@ -238,7 +230,7 @@ export default function App({ usuario, rol, onLogout }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {view === 'viajes' && <button style={btnR} onClick={() => setModal('viaje')}>+ Nuevo viaje</button>}
             {view === 'flota' && <button style={btnR} onClick={() => setModal('camion')}>+ Agregar unidad</button>}
-            {view === 'choferes' && <button style={btnR} onClick={() => setModal('chofer')}>+ Agregar chofer</button>}
+            {view === 'choferes' && <button style={btnR} onClick={() => { loadUsuarios(); setModal('chofer') }}>+ Agregar chofer</button>}
             {view === 'facturas' && <button style={btnR} onClick={() => setModal('factura')}>+ Nueva factura</button>}
             <div style={{ width: 28, height: 28, borderRadius: '50%', background: r, color: w, fontSize: 10, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{usuario?.email?.[0]?.toUpperCase()}</div>
           </div>
@@ -284,7 +276,6 @@ export default function App({ usuario, rol, onLogout }) {
                 <div style={{ fontSize: 10, color: m, marginBottom: 6 }}>
                   <div>📞 {c.telefono||'—'}</div>
                   <div style={{ color: dias<60?'#854F0B':m }}>🪪 {c.licencia_vence||'—'}{dias<60?' ⚠️':''}</div>
-                  {/* Indicador de cuenta vinculada */}
                   <div style={{ marginTop: 4, color: c.user_id ? '#3B6D11' : '#854F0B' }}>
                     {c.user_id ? '🔗 Cuenta vinculada' : '⚠️ Sin cuenta'}
                   </div>
@@ -368,7 +359,6 @@ export default function App({ usuario, rol, onLogout }) {
         </div>
       </div>
 
-      {/* ─── MODALES ─────────────────────────────────────────────────────────── */}
       {modal && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={e=>e.target===e.currentTarget&&setModal(null)}>
         <div style={{ background: w, borderRadius: 12, padding: 20, width: 360, maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
           <button onClick={()=>setModal(null)} style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: m }}>✕</button>
@@ -411,15 +401,19 @@ export default function App({ usuario, rol, onLogout }) {
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Agregar chofer</div>
             {[['nombre','Nombre completo','text'],['telefono','Teléfono','text'],['licencia','No. Licencia','text'],['licencia_vence','Licencia vence','date']].map(([k,l,t])=>
               <div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}
-            <div style={{ borderTop: br, paddingTop: 10, marginTop: 4, marginBottom: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: m, marginBottom: 8 }}>Acceso a la app</div>
-              <label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Email</label>
-              <input style={inp} type="email" placeholder="chofer@fys.com" onChange={e=>setForm({...form,email:e.target.value})}/>
-              <label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Contraseña temporal</label>
-              <input style={inp} type="password" placeholder="mínimo 6 caracteres" onChange={e=>setForm({...form,password:e.target.value})}/>
+            <div style={{ borderTop: br, paddingTop: 10, marginTop: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: m, marginBottom: 8 }}>Vincular con usuario</div>
+              <label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Usuario (email)</label>
+              <select style={inp} onChange={e=>setForm({...form, user_id: e.target.value})}>
+                <option value="">Seleccionar usuario...</option>
+                {usuarios.filter(u => !choferes.find(c => c.user_id === u.id)).map(u=>
+                  <option key={u.id} value={u.id}>{u.email}</option>
+                )}
+              </select>
+              {usuarios.length === 0 && <div style={{ fontSize: 10, color: '#854F0B', marginTop: -4, marginBottom: 8 }}>Cargando usuarios...</div>}
             </div>
             <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 8 }} onClick={crearChofer}>
-              {loading?'Creando cuenta...':'✓ Crear chofer'}
+              {loading ? 'Guardando...' : '✓ Guardar chofer'}
             </button>
           </>}
 
