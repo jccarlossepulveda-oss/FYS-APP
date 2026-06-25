@@ -20,22 +20,79 @@ export default function App({ usuario, rol, onLogout }) {
   useEffect(() => { load() }, [])
 
   async function load() {
-    const [a, b, c, d, e] = await Promise.all([
-      supabase.from('camiones').select('*').order('economico'),
-      supabase.from('choferes').select('*').order('nombre'),
-      supabase.from('viajes').select('*').order('created_at', { ascending: false }),
-      supabase.from('facturas').select('*').order('created_at', { ascending: false }),
-      supabase.from('gasolina').select('*').order('created_at', { ascending: false }),
-    ])
-    if (a.data) setCamiones(a.data)
-    if (b.data) setChoferes(b.data)
-    if (c.data) setViajes(c.data)
-    if (d.data) setFacturas(d.data)
-    if (e.data) setGasolina(e.data)
+    if (rol === 'chofer') {
+      // El chofer solo carga lo suyo — RLS filtra viajes automáticamente
+      const [a, b, c] = await Promise.all([
+        supabase.from('camiones').select('*').order('economico'),
+        supabase.from('choferes').select('*').order('nombre'),
+        supabase.from('viajes').select('*').order('created_at', { ascending: false }),
+      ])
+      if (a.data) setCamiones(a.data)
+      if (b.data) setChoferes(b.data)
+      if (c.data) setViajes(c.data)
+    } else {
+      const [a, b, c, d, e] = await Promise.all([
+        supabase.from('camiones').select('*').order('economico'),
+        supabase.from('choferes').select('*').order('nombre'),
+        supabase.from('viajes').select('*').order('created_at', { ascending: false }),
+        supabase.from('facturas').select('*').order('created_at', { ascending: false }),
+        supabase.from('gasolina').select('*').order('created_at', { ascending: false }),
+      ])
+      if (a.data) setCamiones(a.data)
+      if (b.data) setChoferes(b.data)
+      if (c.data) setViajes(c.data)
+      if (d.data) setFacturas(d.data)
+      if (e.data) setGasolina(e.data)
+    }
   }
 
   async function eliminar(tabla, id, msg) {
     setConfirmar({ msg, fn: async () => { await supabase.from(tabla).delete().eq('id', id); await load(); setConfirmar(null) } })
+  }
+
+  async function crearChofer() {
+    if (!form.nombre || !form.email || !form.password) {
+      alert('Nombre, email y contraseña son requeridos')
+      return
+    }
+    setLoading(true)
+    try {
+      // 1. Crear usuario en Auth con signUp (sin service key)
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: form.email,
+        password: form.password,
+        options: { data: { nombre: form.nombre, rol: 'chofer' } }
+      })
+      if (authError) throw authError
+      const userId = authData.user.id
+
+      // 2. Insertar en choferes con user_id vinculado
+      const { error: choferError } = await supabase.from('choferes').insert([{
+        nombre: form.nombre,
+        telefono: form.telefono || null,
+        licencia: form.licencia || null,
+        licencia_vence: form.licencia_vence || null,
+        user_id: userId,
+        activo: true
+      }])
+      if (choferError) throw choferError
+
+      // 3. Insertar en perfiles con rol chofer
+      const { error: perfilError } = await supabase.from('perfiles').insert([{
+        id: userId,
+        nombre: form.nombre,
+        rol: 'chofer'
+      }])
+      if (perfilError) throw perfilError
+
+      await load()
+      setModal(null)
+      setForm({})
+      alert('✓ Chofer creado. Ya puede iniciar sesión con ' + form.email)
+    } catch (e) {
+      alert('Error: ' + e.message)
+    }
+    setLoading(false)
   }
 
   const r = '#C8001E', w = '#fff', b = '#1a1a1a', m = '#6B6B68', br = '0.5px solid #E0DFDC'
@@ -66,6 +123,7 @@ export default function App({ usuario, rol, onLogout }) {
   const fF = filtroF === 'todas' ? facturas : facturas.filter(f => f.estatus === filtroF)
   const totalGas = gasolina.reduce((a, g) => a + Number(g.monto || 0), 0)
 
+  // ─── VISTA CHOFER ───────────────────────────────────────────────────────────
   if (rol === 'chofer') {
     return (
       <div style={{ minHeight: '100vh', background: '#F7F7F6', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b, paddingBottom: 70 }}>
@@ -79,7 +137,7 @@ export default function App({ usuario, rol, onLogout }) {
         <div style={{ padding: 16 }}>
           {viewC === 'mis-viajes' && <>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, color: m }}>Mis viajes</div>
-            {viajes.length === 0 && <div style={{ ...card, textAlign: 'center', color: m }}>No tienes viajes asignados</div>}
+            {viajes.length === 0 && <div style={{ ...card, textAlign: 'center', color: m, padding: 30 }}>No tienes viajes asignados</div>}
             {viajes.map(v => (
               <div key={v.id} style={{ ...card, marginBottom: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -88,9 +146,10 @@ export default function App({ usuario, rol, onLogout }) {
                 <div style={{ fontSize: 12, marginBottom: 4 }}>📦 {v.cliente}</div>
                 <div style={{ fontSize: 12, color: m, marginBottom: 8 }}>📍 {v.origen} → {v.destino}</div>
                 <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
+                {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, justifyContent: 'center' }} onClick={() => supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id).then(load)}>▶ Iniciar viaje</button>}
-                  {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, justifyContent: 'center' }} onClick={() => supabase.from('viajes').update({ estatus: 'entregado' }).eq('id', v.id).then(load)}>✓ Marcar entregado</button>}
+                  {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center' }} onClick={() => supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id).then(load)}>▶ Iniciar viaje</button>}
+                  {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center' }} onClick={() => supabase.from('viajes').update({ estatus: 'entregado' }).eq('id', v.id).then(load)}>✓ Marcar entregado</button>}
                 </div>
               </div>
             ))}
@@ -108,7 +167,7 @@ export default function App({ usuario, rol, onLogout }) {
                 <div key={k} style={{ marginBottom: 8 }}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} placeholder={ph} onChange={e => setGasForm({ ...gasForm, [k]: e.target.value })} /></div>
               ))}
               <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Fecha</label><input style={inp} type="date" onChange={e => setGasForm({ ...gasForm, fecha: e.target.value })} /></div>
-              <button style={{ ...btnR, width: '100%', justifyContent: 'center', padding: 10 }} onClick={async () => { setLoading(true); await supabase.from('gasolina').insert([gasForm]); setGasForm({}); setLoading(false); alert('✓ Guardado') }}>{loading ? 'Guardando...' : '✓ Guardar'}</button>
+              <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 10 }} onClick={async () => { setLoading(true); await supabase.from('gasolina').insert([gasForm]); setGasForm({}); setLoading(false); alert('✓ Guardado') }}>{loading ? 'Guardando...' : '✓ Guardar'}</button>
             </div>
           )}
           {viewC === 'incidencias' && (
@@ -127,7 +186,7 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Descripción</label>
                 <textarea style={{ ...inp, height: 80, resize: 'none', marginBottom: 0 }} placeholder="Describe qué pasó..." onChange={e => setForm({ ...form, descripcion: e.target.value })} />
               </div>
-              <button style={{ ...btnR, width: '100%', justifyContent: 'center', padding: 10 }} onClick={async () => { setLoading(true); await supabase.from('incidencias').insert([form]); setForm({}); setLoading(false); alert('✓ Reporte enviado') }}>{loading ? 'Enviando...' : '📤 Enviar reporte'}</button>
+              <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 10 }} onClick={async () => { setLoading(true); await supabase.from('incidencias').insert([form]); setForm({}); setLoading(false); alert('✓ Reporte enviado') }}>{loading ? 'Enviando...' : '📤 Enviar reporte'}</button>
             </div>
           )}
         </div>
@@ -142,6 +201,7 @@ export default function App({ usuario, rol, onLogout }) {
     )
   }
 
+  // ─── VISTA ADMIN ────────────────────────────────────────────────────────────
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b, background: '#F7F7F6' }}>
       <div style={{ width: 190, flexShrink: 0, background: w, borderRight: br, display: 'flex', flexDirection: 'column' }}>
@@ -168,9 +228,10 @@ export default function App({ usuario, rol, onLogout }) {
           {navItem('reportes', '📊', 'Reportes')}
         </div>
         <div style={{ padding: '10px 14px', borderTop: br }}>
-          <button onClick={onLogout} style={{ ...btnG, width: '100%', justifyContent: 'center', fontSize: 11 }}>Cerrar sesión</button>
+          <button onClick={onLogout} style={{ ...btnG, width: '100%', textAlign: 'center', fontSize: 11 }}>Cerrar sesión</button>
         </div>
       </div>
+
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         <div style={{ background: w, borderBottom: br, padding: '10px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <span style={{ fontSize: 14, fontWeight: 600 }}>{{ inicio: 'Inicio', flota: 'Flota', choferes: 'Choferes', viajes: 'Viajes', gasolina: 'Gasolina', facturas: 'Facturas', mantenimiento: 'Mantenimiento', reportes: 'Reportes' }[view]}</span>
@@ -182,6 +243,7 @@ export default function App({ usuario, rol, onLogout }) {
             <div style={{ width: 28, height: 28, borderRadius: '50%', background: r, color: w, fontSize: 10, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{usuario?.email?.[0]?.toUpperCase()}</div>
           </div>
         </div>
+
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
           {view === 'inicio' && <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 10, marginBottom: 16 }}>
@@ -200,6 +262,7 @@ export default function App({ usuario, rol, onLogout }) {
               </div>
             </div>
           </>}
+
           {view === 'flota' && <div style={card}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead><tr><th style={th}>Económico</th><th style={th}>Marca</th><th style={th}>Modelo</th><th style={th}>Año</th><th style={th}>Placas</th><th style={th}>Capacidad</th><th style={th}>Estatus</th><th style={th}></th></tr></thead>
@@ -210,6 +273,7 @@ export default function App({ usuario, rol, onLogout }) {
               </tr>)}</tbody>
             </table>
           </div>}
+
           {view === 'choferes' && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 10 }}>
             {choferes.map(c => {
               const dias = c.licencia_vence ? Math.round((new Date(c.licencia_vence)-new Date())/864e5) : 999
@@ -217,24 +281,41 @@ export default function App({ usuario, rol, onLogout }) {
                 <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#fff0f2', color: r, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{c.nombre.split(' ').map(n=>n[0]).slice(0,2).join('')}</div>
                 <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 2 }}>{c.nombre}</div>
                 <div style={{ fontSize: 10, color: m, marginBottom: 6 }}>{c.licencia}</div>
-                <div style={{ fontSize: 10, color: m, marginBottom: 10 }}><div>📞 {c.telefono||'—'}</div><div style={{ color: dias<60?'#854F0B':m }}>🪪 {c.licencia_vence||'—'}{dias<60?' ⚠️':''}</div></div>
+                <div style={{ fontSize: 10, color: m, marginBottom: 6 }}>
+                  <div>📞 {c.telefono||'—'}</div>
+                  <div style={{ color: dias<60?'#854F0B':m }}>🪪 {c.licencia_vence||'—'}{dias<60?' ⚠️':''}</div>
+                  {/* Indicador de cuenta vinculada */}
+                  <div style={{ marginTop: 4, color: c.user_id ? '#3B6D11' : '#854F0B' }}>
+                    {c.user_id ? '🔗 Cuenta vinculada' : '⚠️ Sin cuenta'}
+                  </div>
+                </div>
                 <button style={{ ...btnD, width: '100%', textAlign: 'center' }} onClick={() => eliminar('choferes', c.id, '¿Eliminar a '+c.nombre+'?')}>🗑 Eliminar</button>
               </div>
             })}
           </div>}
+
           {view === 'viajes' && <>
             <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
               {['todos','programado','en_ruta','entregado','cancelado'].map(f=><button key={f} onClick={()=>setFiltroV(f)} style={{ padding: '5px 12px', borderRadius: 20, fontSize: 11, cursor: 'pointer', background: filtroV===f?r:w, color: filtroV===f?w:m, border: filtroV===f?'1px solid '+r:br }}>{f==='todos'?'Todos':f==='en_ruta'?'En ruta':f.charAt(0).toUpperCase()+f.slice(1)}</button>)}
             </div>
             <div style={card}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead><tr><th style={th}>Folio</th><th style={th}>Cliente</th><th style={th}>Ruta</th><th style={th}>Fecha</th><th style={th}>Estatus</th><th style={th}>Acción</th><th style={th}></th></tr></thead>
-              <tbody>{vF.map(v=><tr key={v.id}>
-                <td style={{ ...td, fontWeight: 600 }}>{v.folio}</td><td style={td}>{v.cliente}</td><td style={td}>{v.origen}→{v.destino}</td><td style={td}>{v.fecha}</td><td style={td}>{badge(v.estatus)}</td>
-                <td style={td}>{v.estatus==='programado'&&<button style={btnG} onClick={()=>supabase.from('viajes').update({estatus:'en_ruta'}).eq('id',v.id).then(load)}>▶ Iniciar</button>}{v.estatus==='en_ruta'&&<button style={btnR} onClick={()=>supabase.from('viajes').update({estatus:'entregado'}).eq('id',v.id).then(load)}>✓ Entregar</button>}</td>
-                <td style={td}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
-              </tr>)}</tbody>
+              <thead><tr><th style={th}>Folio</th><th style={th}>Cliente</th><th style={th}>Ruta</th><th style={th}>Chofer</th><th style={th}>Fecha</th><th style={th}>Estatus</th><th style={th}>Acción</th><th style={th}></th></tr></thead>
+              <tbody>{vF.map(v=>{
+                const chofer = choferes.find(c => c.id === v.chofer_id)
+                return <tr key={v.id}>
+                  <td style={{ ...td, fontWeight: 600 }}>{v.folio}</td>
+                  <td style={td}>{v.cliente}</td>
+                  <td style={td}>{v.origen}→{v.destino}</td>
+                  <td style={td}>{chofer?.nombre || <span style={{ color: m }}>Sin asignar</span>}</td>
+                  <td style={td}>{v.fecha}</td>
+                  <td style={td}>{badge(v.estatus)}</td>
+                  <td style={td}>{v.estatus==='programado'&&<button style={btnG} onClick={()=>supabase.from('viajes').update({estatus:'en_ruta'}).eq('id',v.id).then(load)}>▶ Iniciar</button>}{v.estatus==='en_ruta'&&<button style={btnR} onClick={()=>supabase.from('viajes').update({estatus:'entregado'}).eq('id',v.id).then(load)}>✓ Entregar</button>}</td>
+                  <td style={td}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
+                </tr>
+              })}</tbody>
             </table></div>
           </>}
+
           {view === 'facturas' && <>
             <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
               {['todas','pendiente','cobrada','vencida'].map(f=><button key={f} onClick={()=>setFiltroF(f)} style={{ padding: '5px 12px', borderRadius: 20, fontSize: 11, cursor: 'pointer', background: filtroF===f?r:w, color: filtroF===f?w:m, border: filtroF===f?'1px solid '+r:br }}>{f.charAt(0).toUpperCase()+f.slice(1)}</button>)}
@@ -250,6 +331,7 @@ export default function App({ usuario, rol, onLogout }) {
               </tr>)}</tbody>
             </table></div>
           </>}
+
           {view === 'gasolina' && <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 10, marginBottom: 14 }}>
               <div style={{ background: w, border: br, borderRadius: 8, padding: 12 }}><div style={{ fontSize: 11, color: m, marginBottom: 5 }}>⛽ Total registros</div><div style={{ fontSize: 20, fontWeight: 600 }}>{gasolina.length}</div></div>
@@ -275,23 +357,85 @@ export default function App({ usuario, rol, onLogout }) {
               {gasolina.length === 0 && <div style={{ textAlign: 'center', color: m, fontSize: 12, padding: 20 }}>No hay registros de gasolina aún</div>}
             </div>
           </>}
+
           {view === 'mantenimiento' && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {camiones.map(c=><div key={c.id} style={card}><div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚛 {c.economico}</div>{['Aceite','Llantas','Frenos','Seguro','Verificación'].map(t=><div key={t} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: br, fontSize: 11 }}><span>{t}</span><span style={{ color: '#9E9E9B', fontSize: 10 }}>Pendiente</span></div>)}</div>)}
           </div>}
+
           {view === 'reportes' && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 10 }}>
             {[['📍',viajes.length,'Viajes totales'],['✅',viajes.filter(v=>v.estatus==='entregado').length,'Entregados'],['📄',facturas.length,'Facturas'],['💰','$'+facturas.filter(f=>f.estatus==='cobrada').reduce((a,f)=>a+Number(f.monto||0),0).toLocaleString(),'Cobrado'],['⛽','$'+totalGas.toLocaleString(),'Gasolina total'],['🚛',camiones.length,'Unidades']].map(([i,v,l])=><div key={l} style={{ ...card, textAlign: 'center' }}><div style={{ fontSize: 22, color: r, marginBottom: 6 }}>{i}</div><div style={{ fontSize: 18, fontWeight: 600 }}>{v}</div><div style={{ fontSize: 10, color: m }}>{l}</div></div>)}
           </div>}
         </div>
       </div>
+
+      {/* ─── MODALES ─────────────────────────────────────────────────────────── */}
       {modal && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={e=>e.target===e.currentTarget&&setModal(null)}>
-        <div style={{ background: w, borderRadius: 12, padding: 20, width: 360, maxHeight: 500, overflowY: 'auto', position: 'relative' }}>
+        <div style={{ background: w, borderRadius: 12, padding: 20, width: 360, maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
           <button onClick={()=>setModal(null)} style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: m }}>✕</button>
-          {modal==='viaje'&&<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Nuevo viaje</div>{[['cliente','Cliente','text'],['origen','Origen','text'],['destino','Destino','text'],['fecha','Fecha','date'],['tipo_carga','Tipo de carga','text']].map(([k,l,t])=><div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}<div><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Chofer</label><select style={inp} onChange={e=>setForm({...form,chofer_id:e.target.value})}><option value="">Seleccionar...</option>{choferes.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div><div><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Camión</label><select style={inp} onChange={e=>setForm({...form,camion_id:e.target.value})}><option value="">Seleccionar...</option>{camiones.filter(c=>c.estatus==='disponible').map(c=><option key={c.id} value={c.id}>{c.economico}</option>)}</select></div><button style={{ ...btnR, width: '100%', justifyContent: 'center', padding: 8 }} onClick={async()=>{setLoading(true);await supabase.from('viajes').insert([{...form,folio:'VJ-'+String(viajes.length+1).padStart(3,'0'),estatus:'programado'}]);await load();setModal(null);setForm({});setLoading(false)}}>{loading?'Guardando...':'✓ Crear viaje'}</button></>}
-          {modal==='camion'&&<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Agregar unidad</div>{[['economico','Económico','text'],['placas','Placas','text'],['marca','Marca','text'],['modelo','Modelo','text'],['anio','Año','number'],['capacidad','Capacidad','text']].map(([k,l,t])=><div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}<button style={{ ...btnR, width: '100%', justifyContent: 'center', padding: 8 }} onClick={async()=>{setLoading(true);await supabase.from('camiones').insert([{...form,estatus:'disponible'}]);await load();setModal(null);setForm({});setLoading(false)}}>{loading?'Guardando...':'✓ Guardar'}</button></>}
-          {modal==='chofer'&&<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Agregar chofer</div>{[['nombre','Nombre','text'],['telefono','Teléfono','text'],['licencia','Licencia','text'],['licencia_vence','Licencia vence','date']].map(([k,l,t])=><div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}<button style={{ ...btnR, width: '100%', justifyContent: 'center', padding: 8 }} onClick={async()=>{setLoading(true);await supabase.from('choferes').insert([{...form}]);await load();setModal(null);setForm({});setLoading(false)}}>{loading?'Guardando...':'✓ Guardar'}</button></>}
-          {modal==='factura'&&<><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Nueva factura</div>{[['cliente','Cliente','text'],['monto','Monto','number'],['fecha','Fecha emisión','date'],['fecha_vence','Fecha vencimiento','date']].map(([k,l,t])=><div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}<button style={{ ...btnR, width: '100%', justifyContent: 'center', padding: 8 }} onClick={async()=>{setLoading(true);await supabase.from('facturas').insert([{...form,folio:'FYS-'+String(facturas.length+101).padStart(4,'0'),estatus:'pendiente'}]);await load();setModal(null);setForm({});setLoading(false)}}>{loading?'Guardando...':'✓ Guardar'}</button></>}
+
+          {modal==='viaje'&&<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Nuevo viaje</div>
+            {[['cliente','Cliente','text'],['origen','Origen','text'],['destino','Destino','text'],['fecha','Fecha','date'],['tipo_carga','Tipo de carga','text'],['notas','Notas','text']].map(([k,l,t])=>
+              <div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}
+            <div><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Chofer</label>
+              <select style={inp} onChange={e=>setForm({...form,chofer_id:e.target.value})}>
+                <option value="">Seleccionar...</option>
+                {choferes.map(c=><option key={c.id} value={c.id}>{c.nombre}{!c.user_id?' (sin cuenta)':''}</option>)}
+              </select>
+            </div>
+            <div><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Camión</label>
+              <select style={inp} onChange={e=>setForm({...form,camion_id:e.target.value})}>
+                <option value="">Seleccionar...</option>
+                {camiones.filter(c=>c.estatus==='disponible').map(c=><option key={c.id} value={c.id}>{c.economico}</option>)}
+              </select>
+            </div>
+            <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 8 }} onClick={async()=>{
+              setLoading(true)
+              await supabase.from('viajes').insert([{...form,folio:'VJ-'+String(viajes.length+1).padStart(3,'0'),estatus:'programado'}])
+              await load(); setModal(null); setForm({}); setLoading(false)
+            }}>{loading?'Guardando...':'✓ Crear viaje'}</button>
+          </>}
+
+          {modal==='camion'&&<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Agregar unidad</div>
+            {[['economico','Económico','text'],['placas','Placas','text'],['marca','Marca','text'],['modelo','Modelo','text'],['anio','Año','number'],['capacidad','Capacidad','text']].map(([k,l,t])=>
+              <div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}
+            <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 8 }} onClick={async()=>{
+              setLoading(true)
+              await supabase.from('camiones').insert([{...form,estatus:'disponible'}])
+              await load(); setModal(null); setForm({}); setLoading(false)
+            }}>{loading?'Guardando...':'✓ Guardar'}</button>
+          </>}
+
+          {modal==='chofer'&&<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Agregar chofer</div>
+            {[['nombre','Nombre completo','text'],['telefono','Teléfono','text'],['licencia','No. Licencia','text'],['licencia_vence','Licencia vence','date']].map(([k,l,t])=>
+              <div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}
+            <div style={{ borderTop: br, paddingTop: 10, marginTop: 4, marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: m, marginBottom: 8 }}>Acceso a la app</div>
+              <label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Email</label>
+              <input style={inp} type="email" placeholder="chofer@fys.com" onChange={e=>setForm({...form,email:e.target.value})}/>
+              <label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>Contraseña temporal</label>
+              <input style={inp} type="password" placeholder="mínimo 6 caracteres" onChange={e=>setForm({...form,password:e.target.value})}/>
+            </div>
+            <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 8 }} onClick={crearChofer}>
+              {loading?'Creando cuenta...':'✓ Crear chofer'}
+            </button>
+          </>}
+
+          {modal==='factura'&&<>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Nueva factura</div>
+            {[['cliente','Cliente','text'],['monto','Monto','number'],['fecha','Fecha emisión','date'],['fecha_vence','Fecha vencimiento','date']].map(([k,l,t])=>
+              <div key={k}><label style={{ fontSize: 11, color: m, display: 'block', marginBottom: 3 }}>{l}</label><input style={inp} type={t} onChange={e=>setForm({...form,[k]:e.target.value})}/></div>)}
+            <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 8 }} onClick={async()=>{
+              setLoading(true)
+              await supabase.from('facturas').insert([{...form,folio:'FYS-'+String(facturas.length+101).padStart(4,'0'),estatus:'pendiente'}])
+              await load(); setModal(null); setForm({}); setLoading(false)
+            }}>{loading?'Guardando...':'✓ Guardar'}</button>
+          </>}
         </div>
       </div>}
+
       {confirmar && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ background: w, borderRadius: 12, padding: 24, width: 300, textAlign: 'center' }}>
           <div style={{ fontSize: 22, marginBottom: 8 }}>🗑</div>
