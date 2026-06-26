@@ -18,6 +18,7 @@ export default function App({ usuario, rol, onLogout }) {
   const [filtroV, setFiltroV] = useState('todos')
   const [filtroF, setFiltroF] = useState('todas')
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
+  const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     load()
@@ -107,16 +108,12 @@ export default function App({ usuario, rol, onLogout }) {
     { v: 'viajes', icon: '📍', label: 'Viajes', count: vAct || null },
     { v: 'gasolina', icon: '⛽', label: 'Gasolina' },
     { v: 'facturas', icon: '📄', label: 'Facturas', count: fPend.length || null },
-    { v: 'mantenimiento', icon: '🔧', label: 'Mantenimie...' },
+    { v: 'mantenimiento', icon: '🔧', label: 'Mantenimiento' },
     { v: 'reportes', icon: '📊', label: 'Reportes' },
   ]
 
-  // Modal content — mismo para móvil y desktop
   const modalContent = modal && (
-    <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}
-      onClick={e => e.target === e.currentTarget && setModal(null)}
-    >
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }} onClick={e => e.target === e.currentTarget && setModal(null)}>
       <div style={{ background: w, borderRadius: 12, padding: 20, width: 'calc(100% - 32px)', maxWidth: 400, margin: '40px auto 40px', position: 'relative' }}>
         <button onClick={() => setModal(null)} style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: m, lineHeight: 1 }}>✕</button>
 
@@ -276,7 +273,7 @@ export default function App({ usuario, rol, onLogout }) {
     )
   }
 
-  // ─── CONTENIDO PRINCIPAL ADMIN ──────────────────────────────────────────────
+  // ─── CONTENIDO ADMIN ────────────────────────────────────────────────────────
   const mainContent = (
     <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '12px' : '16px 18px' }}>
       {view === 'inicio' && <>
@@ -429,12 +426,14 @@ export default function App({ usuario, rol, onLogout }) {
     </div>
   )
 
-  // ─── LAYOUT MÓVIL ───────────────────────────────────────────────────────────
+  // ─── LAYOUT MÓVIL CON HAMBURGUESA ───────────────────────────────────────────
   if (isMobile) {
     return (
-      <div style={{ minHeight: '100vh', background: '#F7F7F6', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b, paddingBottom: 70 }}>
-        <div style={{ background: r, color: w, padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ minHeight: '100vh', background: '#F7F7F6', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b }}>
+        {/* Header */}
+        <div style={{ background: r, color: w, padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button onClick={() => setMenuOpen(!menuOpen)} style={{ background: 'none', border: 'none', color: w, fontSize: 22, cursor: 'pointer', padding: 0, lineHeight: 1 }}>☰</button>
             <div style={{ background: 'rgba(255,255,255,0.2)', borderRadius: 6, padding: '4px 10px', fontWeight: 700, fontSize: 14 }}>FYS</div>
             <span style={{ fontSize: 13, fontWeight: 500 }}>{viewTitle[view]}</span>
           </div>
@@ -443,18 +442,49 @@ export default function App({ usuario, rol, onLogout }) {
             {view === 'flota' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => setModal('camion')}>+ Unidad</button>}
             {view === 'choferes' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => { loadUsuarios(); setModal('chofer') }}>+ Chofer</button>}
             {view === 'facturas' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => setModal('factura')}>+ Factura</button>}
-            <button onClick={onLogout} style={{ background: 'rgba(255,255,255,0.2)', color: w, border: 'none', padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>Salir</button>
           </div>
         </div>
-        <div style={{ padding: 12 }}>{mainContent}</div>
-        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: w, borderTop: br, display: 'flex', overflowX: 'auto' }}>
-          {navLinks.map(({ v, icon, label, count }) => (
-            <div key={v} onClick={() => setView(v)} style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, padding: '6px 14px', cursor: 'pointer', color: view === v ? r : m, fontSize: 9, fontWeight: view === v ? 600 : 400, position: 'relative' }}>
-              <span style={{ fontSize: 18 }}>{icon}</span>{label}
-              {count ? <span style={{ position: 'absolute', top: 4, right: 8, background: r, color: w, fontSize: 8, padding: '1px 4px', borderRadius: 10 }}>{count}</span> : null}
+
+        {/* Menú lateral deslizable */}
+        {menuOpen && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 30 }} onClick={() => setMenuOpen(false)}>
+            <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 260, background: w, boxShadow: '4px 0 20px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+              <div style={{ background: r, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ color: w, fontWeight: 700, fontSize: 16 }}>FYS</div>
+                  <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>Servicios Integrales del Sureste</div>
+                </div>
+                <button onClick={() => setMenuOpen(false)} style={{ background: 'none', border: 'none', color: w, fontSize: 22, cursor: 'pointer' }}>✕</button>
+              </div>
+              <div style={{ padding: '12px 16px', borderBottom: br, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: r, color: w, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13 }}>{usuario?.email?.[0]?.toUpperCase()}</div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{usuario?.email?.split('@')[0]}</div>
+                  <div style={{ fontSize: 10, color: m }}>Administrador</div>
+                </div>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+                {[['Principal', navLinks.slice(0,1)], ['Operaciones', navLinks.slice(1,4)], ['Finanzas', navLinks.slice(4,6)], ['Gestión', navLinks.slice(6)]].map(([section, links]) => (
+                  <div key={section}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: '#9E9E9B', padding: '10px 16px 4px', textTransform: 'uppercase', letterSpacing: .7 }}>{section}</div>
+                    {links.map(({ v, icon, label, count }) => (
+                      <div key={v} onClick={() => { setView(v); setMenuOpen(false) }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', cursor: 'pointer', borderLeft: view === v ? '3px solid ' + r : '3px solid transparent', background: view === v ? '#fff0f2' : 'transparent', color: view === v ? r : b, fontSize: 14 }}>
+                        <span style={{ fontSize: 20 }}>{icon}</span>
+                        <span>{label}</span>
+                        {count ? <span style={{ marginLeft: 'auto', background: r, color: w, fontSize: 10, padding: '2px 7px', borderRadius: 10 }}>{count}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: '16px', borderTop: br }}>
+                <button onClick={onLogout} style={{ ...btnG, width: '100%', textAlign: 'center', padding: 12, fontSize: 13 }}>Cerrar sesión</button>
+              </div>
             </div>
-          ))}
-        </div>
+          </div>
+        )}
+
+        <div style={{ padding: 12 }}>{mainContent}</div>
         {modalContent}
         {confirmarModal}
       </div>
