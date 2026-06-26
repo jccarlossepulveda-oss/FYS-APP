@@ -79,6 +79,47 @@ export default function App({ usuario, rol, onLogout }) {
     setLoading(false)
   }
 
+  async function crearViaje() {
+    setLoading(true)
+    try {
+      // Verificar que el camión no tenga viaje activo
+      if (form.camion_id) {
+        const { data: viajeActivo } = await supabase
+          .from('viajes')
+          .select('id')
+          .eq('camion_id', form.camion_id)
+          .in('estatus', ['programado', 'en_ruta', 'cargando'])
+          .maybeSingle()
+        if (viajeActivo) {
+          alert('⚠️ Este camión ya tiene un viaje activo')
+          setLoading(false)
+          return
+        }
+      }
+      await supabase.from('viajes').insert([{
+        ...form,
+        folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'),
+        estatus: 'programado'
+      }])
+      if (form.camion_id) {
+        await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', form.camion_id)
+      }
+      await load(); setModal(null); setForm({})
+    } catch (e) { alert('Error: ' + e.message) }
+    setLoading(false)
+  }
+
+  async function entregarViaje(v) {
+    await supabase.from('viajes').update({ estatus: 'entregado' }).eq('id', v.id)
+    if (v.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
+    await load()
+  }
+
+  async function iniciarViaje(v) {
+    await supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id)
+    await load()
+  }
+
   const r = '#C8001E', w = '#fff', b = '#1a1a1a', m = '#6B6B68', br = '0.5px solid #E0DFDC'
   const card = { background: w, border: br, borderRadius: 12, padding: 14 }
   const btnR = { background: r, color: w, border: 'none', padding: '5px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
@@ -133,11 +174,9 @@ export default function App({ usuario, rol, onLogout }) {
               {camiones.filter(c => c.estatus === 'disponible').map(c => <option key={c.id} value={c.id}>{c.economico}</option>)}
             </select>
           </div>
-          <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={async () => {
-            setLoading(true)
-            await supabase.from('viajes').insert([{ ...form, folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'), estatus: 'programado' }])
-            await load(); setModal(null); setForm({}); setLoading(false)
-          }}>{loading ? 'Guardando...' : '✓ Crear viaje'}</button>
+          <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={crearViaje}>
+            {loading ? 'Guardando...' : '✓ Crear viaje'}
+          </button>
         </>}
 
         {modal === 'camion' && <>
@@ -222,8 +261,8 @@ export default function App({ usuario, rol, onLogout }) {
                 <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
                 {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id).then(load)}>▶ Iniciar viaje</button>}
-                  {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => supabase.from('viajes').update({ estatus: 'entregado' }).eq('id', v.id).then(load)}>✓ Marcar entregado</button>}
+                  {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => iniciarViaje(v)}>▶ Iniciar viaje</button>}
+                  {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => entregarViaje(v)}>✓ Marcar entregado</button>}
                 </div>
               </div>
             ))}
@@ -344,8 +383,8 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>👷 {chofer?.nombre || 'Sin asignar'}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
               <div style={{ display: 'flex', gap: 6 }}>
-                {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={()=>supabase.from('viajes').update({estatus:'en_ruta'}).eq('id',v.id).then(load)}>▶ Iniciar</button>}
-                {v.estatus==='en_ruta'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={()=>supabase.from('viajes').update({estatus:'entregado'}).eq('id',v.id).then(load)}>✓ Entregar</button>}
+                {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
+                {v.estatus==='en_ruta'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
                 <button style={{ ...btnD, padding: '8px 12px' }} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button>
               </div>
             </div>
@@ -359,7 +398,10 @@ export default function App({ usuario, rol, onLogout }) {
                 <td style={{ ...td, fontWeight: 600 }}>{v.folio}</td><td style={td}>{v.cliente}</td><td style={td}>{v.origen}→{v.destino}</td>
                 <td style={td}>{chofer?.nombre || <span style={{ color: m }}>Sin asignar</span>}</td>
                 <td style={td}>{v.fecha}</td><td style={td}>{badge(v.estatus)}</td>
-                <td style={td}>{v.estatus==='programado'&&<button style={btnG} onClick={()=>supabase.from('viajes').update({estatus:'en_ruta'}).eq('id',v.id).then(load)}>▶ Iniciar</button>}{v.estatus==='en_ruta'&&<button style={btnR} onClick={()=>supabase.from('viajes').update({estatus:'entregado'}).eq('id',v.id).then(load)}>✓ Entregar</button>}</td>
+                <td style={td}>
+                  {v.estatus==='programado'&&<button style={btnG} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
+                  {v.estatus==='en_ruta'&&<button style={btnR} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
+                </td>
                 <td style={td}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
               </tr>
             })}</tbody>
@@ -430,7 +472,6 @@ export default function App({ usuario, rol, onLogout }) {
   if (isMobile) {
     return (
       <div style={{ minHeight: '100vh', background: '#F7F7F6', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b }}>
-        {/* Header */}
         <div style={{ background: r, color: w, padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <button onClick={() => setMenuOpen(!menuOpen)} style={{ background: 'none', border: 'none', color: w, fontSize: 22, cursor: 'pointer', padding: 0, lineHeight: 1 }}>☰</button>
@@ -445,7 +486,6 @@ export default function App({ usuario, rol, onLogout }) {
           </div>
         </div>
 
-        {/* Menú lateral deslizable */}
         {menuOpen && (
           <div style={{ position: 'fixed', inset: 0, zIndex: 30 }} onClick={() => setMenuOpen(false)}>
             <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 260, background: w, boxShadow: '4px 0 20px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
