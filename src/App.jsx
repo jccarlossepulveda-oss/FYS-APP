@@ -9,8 +9,6 @@ export default function App({ usuario, rol, onLogout }) {
   const [viajes, setViajes] = useState([])
   const [facturas, setFacturas] = useState([])
   const [gasolina, setGasolina] = useState([])
-  const [clientes, setClientes] = useState([])
-  const [gastos, setGastos] = useState([])
   const [usuarios, setUsuarios] = useState([])
   const [modal, setModal] = useState(null)
   const [confirmar, setConfirmar] = useState(null)
@@ -51,29 +49,32 @@ export default function App({ usuario, rol, onLogout }) {
         setViajesNuevos(c.data.filter(v => v.estatus === 'programado'))
       }
     } else {
-      const [a, b, c, d, e, f, g] = await Promise.all([
+      const [a, b, c, d, e] = await Promise.all([
         supabase.from('camiones').select('*').order('economico'),
         supabase.from('choferes').select('*').order('nombre'),
         supabase.from('viajes').select('*').order('created_at', { ascending: false }),
         supabase.from('facturas').select('*').order('created_at', { ascending: false }),
         supabase.from('gasolina').select('*').order('created_at', { ascending: false }),
-        supabase.from('clientes').select('*').order('nombre'),
-        supabase.from('gastos').select('*').order('fecha', { ascending: false }),
       ])
       if (a.data) setCamiones(a.data)
       if (b.data) setChoferes(b.data)
       if (c.data) setViajes(c.data)
       if (d.data) setFacturas(d.data)
       if (e.data) setGasolina(e.data)
-      if (f.data) setClientes(f.data)
-      if (g.data) setGastos(g.data)
-      if (a.data && c.data) sincronizarCamiones(a.data, c.data)
+
+      // Sincronizar estatus de camiones con viajes activos
+      if (a.data && c.data) {
+        sincronizarCamiones(a.data, c.data)
+      }
     }
   }
 
+  // Sincroniza el estatus de camiones basándose en viajes activos
   async function sincronizarCamiones(listaCamiones, listaViajes) {
     const camionesEnRuta = new Set(
-      listaViajes.filter(v => v.estatus === 'en_ruta' && v.camion_id).map(v => v.camion_id)
+      listaViajes
+        .filter(v => v.estatus === 'en_ruta' && v.camion_id)
+        .map(v => v.camion_id)
     )
     for (const camion of listaCamiones) {
       if (camionesEnRuta.has(camion.id) && camion.estatus !== 'en_ruta') {
@@ -92,9 +93,10 @@ export default function App({ usuario, rol, onLogout }) {
   async function eliminar(tabla, id, msg) {
     setConfirmar({
       msg, fn: async () => {
+        // Si se elimina un viaje, liberar el camión
         if (tabla === 'viajes') {
           const viaje = viajes.find(v => v.id === id)
-          if (viaje?.camion_id && !['entregado','cancelado'].includes(viaje.estatus)) {
+          if (viaje?.camion_id && viaje.estatus !== 'entregado' && viaje.estatus !== 'cancelado') {
             await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', viaje.camion_id)
           }
         }
@@ -125,13 +127,26 @@ export default function App({ usuario, rol, onLogout }) {
   async function crearViaje() {
     setLoading(true)
     try {
+      // Bloqueo por día
       if (form.camion_id && form.fecha) {
         const { data: viajeActivo } = await supabase
-          .from('viajes').select('id').eq('camion_id', form.camion_id).eq('fecha', form.fecha)
-          .in('estatus', ['programado', 'en_ruta', 'cargando']).maybeSingle()
-        if (viajeActivo) { alert('⚠️ Este camión ya tiene un viaje asignado para ese día'); setLoading(false); return }
+          .from('viajes').select('id')
+          .eq('camion_id', form.camion_id)
+          .eq('fecha', form.fecha)
+          .in('estatus', ['programado', 'en_ruta', 'cargando'])
+          .maybeSingle()
+        if (viajeActivo) {
+          alert('⚠️ Este camión ya tiene un viaje asignado para ese día')
+          setLoading(false)
+          return
+        }
       }
-      await supabase.from('viajes').insert([{ ...form, folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'), estatus: 'programado' }])
+      // Crear viaje — el camión NO cambia de estatus aquí, solo al iniciar
+      await supabase.from('viajes').insert([{
+        ...form,
+        folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'),
+        estatus: 'programado'
+      }])
       await load(); setModal(null); setForm({})
     } catch (e) { alert('Error: ' + e.message) }
     setLoading(false)
@@ -139,12 +154,16 @@ export default function App({ usuario, rol, onLogout }) {
 
   async function cancelarViaje(v) {
     await supabase.from('viajes').update({ estatus: 'cancelado' }).eq('id', v.id)
-    if (v.camion_id && v.estatus === 'en_ruta') await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
+    // Solo liberar camión si estaba en ruta
+    if (v.camion_id && v.estatus === 'en_ruta') {
+      await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
+    }
     await load()
   }
 
   async function iniciarViaje(v) {
     await supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id)
+    // El camión se marca en ruta SOLO cuando el chofer inicia
     if (v.camion_id) await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', v.camion_id)
     await load()
   }
@@ -160,7 +179,9 @@ export default function App({ usuario, rol, onLogout }) {
       const { data: urlData } = supabase.storage.from('evidencias').getPublicUrl(nombre)
       await supabase.from('viajes').update({ estatus: 'entregado', evidencia_url: urlData.publicUrl }).eq('id', viajeEntrega.id)
       if (viajeEntrega.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', viajeEntrega.camion_id)
-      await load(); setViajeEntrega(null); setFotoEvidencia(null)
+      await load()
+      setViajeEntrega(null)
+      setFotoEvidencia(null)
       alert('✓ Entrega registrada')
     } catch (e) { alert('Error: ' + e.message) }
     setLoading(false)
@@ -205,8 +226,7 @@ export default function App({ usuario, rol, onLogout }) {
   const vF = viajes.filter(v => filtroV === 'todos' || v.estatus === filtroV).filter(v => filtroChofer === 'todos' || v.chofer_id === filtroChofer)
   const fF = filtroF === 'todas' ? facturas : facturas.filter(f => f.estatus === filtroF)
   const totalGas = gasolina.reduce((a, g) => a + Number(g.monto || 0), 0)
-  const totalGastos = gastos.reduce((a, g) => a + Number(g.monto || 0), 0)
-  const viewTitle = { inicio: 'Inicio', flota: 'Flota', choferes: 'Choferes', viajes: 'Viajes', gasolina: 'Gasolina', facturas: 'Facturas', clientes: 'Clientes', gastos: 'Gastos', mantenimiento: 'Mantenimiento', reportes: 'Reportes' }
+  const viewTitle = { inicio: 'Inicio', flota: 'Flota', choferes: 'Choferes', viajes: 'Viajes', gasolina: 'Gasolina', facturas: 'Facturas', mantenimiento: 'Mantenimiento', reportes: 'Reportes' }
 
   const navLinks = [
     { v: 'inicio', icon: '🏠', label: 'Inicio' },
@@ -215,8 +235,6 @@ export default function App({ usuario, rol, onLogout }) {
     { v: 'viajes', icon: '📍', label: 'Viajes', count: vAct || null },
     { v: 'gasolina', icon: '⛽', label: 'Gasolina' },
     { v: 'facturas', icon: '📄', label: 'Facturas', count: fPend.length || null },
-    { v: 'clientes', icon: '🏢', label: 'Clientes' },
-    { v: 'gastos', icon: '💸', label: 'Gastos' },
     { v: 'mantenimiento', icon: '🔧', label: 'Mantenimiento' },
     { v: 'reportes', icon: '📊', label: 'Reportes' },
   ]
@@ -279,13 +297,7 @@ export default function App({ usuario, rol, onLogout }) {
 
         {modal === 'viaje' && <>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Nuevo viaje</div>
-          <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>Cliente</label>
-            <select style={inp} onChange={e => setForm({ ...form, cliente: e.target.value })}>
-              <option value="">Seleccionar o escribir...</option>
-              {clientes.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-            </select>
-          </div>
-          {[['origen','Origen','text'],['destino','Destino','text'],['tipo_carga','Tipo de carga','text'],['notas','Notas','text']].map(([k,l,t]) =>
+          {[['cliente','Cliente','text'],['origen','Origen','text'],['destino','Destino','text'],['tipo_carga','Tipo de carga','text'],['notas','Notas','text']].map(([k,l,t]) =>
             <div key={k}><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>{l}</label><input style={inp} type={t} onChange={e => setForm({ ...form, [k]: e.target.value })} /></div>)}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>📅 Fecha</label><input style={inp} type="date" onChange={e => setForm({ ...form, fecha: e.target.value })} /></div>
@@ -339,13 +351,7 @@ export default function App({ usuario, rol, onLogout }) {
 
         {modal === 'factura' && <>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Nueva factura</div>
-          <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>Cliente</label>
-            <select style={inp} onChange={e => setForm({ ...form, cliente: e.target.value })}>
-              <option value="">Seleccionar...</option>
-              {clientes.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-            </select>
-          </div>
-          {[['monto','Monto','number'],['fecha','Fecha emisión','date'],['fecha_vence','Fecha vencimiento','date']].map(([k,l,t]) =>
+          {[['cliente','Cliente','text'],['monto','Monto','number'],['fecha','Fecha emisión','date'],['fecha_vence','Fecha vencimiento','date']].map(([k,l,t]) =>
             <div key={k}><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>{l}</label><input style={inp} type={t} onChange={e => setForm({ ...form, [k]: e.target.value })} /></div>)}
           <div style={{ marginBottom: 10 }}>
             <label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>📎 Adjuntar archivo</label>
@@ -355,54 +361,6 @@ export default function App({ usuario, rol, onLogout }) {
           <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={crearFactura}>
             {loading ? 'Guardando...' : '✓ Guardar'}
           </button>
-        </>}
-
-        {modal === 'cliente' && <>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Nuevo cliente</div>
-          {[['nombre','Nombre / Empresa','text'],['contacto','Contacto','text'],['telefono','Teléfono','text'],['email','Email','email'],['direccion','Dirección','text'],['notas','Notas','text']].map(([k,l,t]) =>
-            <div key={k}><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>{l}</label><input style={inp} type={t} onChange={e => setForm({ ...form, [k]: e.target.value })} /></div>)}
-          <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={async () => {
-            if (!form.nombre) { alert('El nombre es requerido'); return }
-            setLoading(true)
-            await supabase.from('clientes').insert([{ ...form }])
-            await load(); setModal(null); setForm({}); setLoading(false)
-          }}>{loading ? 'Guardando...' : '✓ Guardar cliente'}</button>
-        </>}
-
-        {modal === 'gasto' && <>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Registrar gasto</div>
-          <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>Tipo</label>
-            <select style={inp} onChange={e => setForm({ ...form, tipo: e.target.value })}>
-              <option value="">Seleccionar...</option>
-              <option value="caseta">Caseta</option>
-              <option value="reparacion">Reparación</option>
-              <option value="llantas">Llantas</option>
-              <option value="aceite">Aceite / Lubricantes</option>
-              <option value="lavado">Lavado</option>
-              <option value="seguro">Seguro</option>
-              <option value="otro">Otro</option>
-            </select>
-          </div>
-          {[['monto','Monto','number'],['fecha','Fecha','date'],['descripcion','Descripción','text']].map(([k,l,t]) =>
-            <div key={k}><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>{l}</label><input style={inp} type={t} onChange={e => setForm({ ...form, [k]: e.target.value })} /></div>)}
-          <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>Unidad (opcional)</label>
-            <select style={inp} onChange={e => setForm({ ...form, camion_id: e.target.value })}>
-              <option value="">Sin unidad específica</option>
-              {camiones.map(c => <option key={c.id} value={c.id}>{c.economico}</option>)}
-            </select>
-          </div>
-          <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>Viaje (opcional)</label>
-            <select style={inp} onChange={e => setForm({ ...form, viaje_id: e.target.value })}>
-              <option value="">Sin viaje específico</option>
-              {viajes.filter(v => v.estatus !== 'cancelado').map(v => <option key={v.id} value={v.id}>{v.folio} — {v.cliente}</option>)}
-            </select>
-          </div>
-          <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={async () => {
-            if (!form.tipo || !form.monto || !form.fecha) { alert('Tipo, monto y fecha son requeridos'); return }
-            setLoading(true)
-            await supabase.from('gastos').insert([{ ...form }])
-            await load(); setModal(null); setForm({}); setLoading(false)
-          }}>{loading ? 'Guardando...' : '✓ Guardar gasto'}</button>
         </>}
 
         {modal === 'historial' && historialChofer && <>
@@ -452,15 +410,19 @@ export default function App({ usuario, rol, onLogout }) {
           </div>
           <button onClick={onLogout} style={{ background: 'rgba(255,255,255,0.2)', color: w, border: 'none', padding: '5px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>Salir</button>
         </div>
+
         {viajesNuevos.length > 0 && viewC === 'mis-viajes' && (
           <div style={{ background: '#E6F1FB', borderBottom: '1px solid #B8D4F0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 18 }}>🔔</span>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>{viajesNuevos.length === 1 ? 'Tienes un viaje nuevo asignado' : `Tienes ${viajesNuevos.length} viajes nuevos`}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>
+                {viajesNuevos.length === 1 ? 'Tienes un viaje nuevo asignado' : `Tienes ${viajesNuevos.length} viajes nuevos`}
+              </div>
               <div style={{ fontSize: 11, color: '#185FA5' }}>Revisa los detalles abajo</div>
             </div>
           </div>
         )}
+
         <div style={{ padding: 16 }}>
           {viewC === 'mis-viajes' && <>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, color: m }}>Mis viajes</div>
@@ -479,7 +441,12 @@ export default function App({ usuario, rol, onLogout }) {
                   {cam && <div style={{ fontSize: 11, color: m, marginBottom: 4 }}>🚛 {cam.economico}</div>}
                   <div style={{ fontSize: 11, color: m, marginBottom: v.notas ? 4 : 10 }}>📅 {v.fecha}{v.hora ? ' — ⏰ ' + v.hora : ''}</div>
                   {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
-                  {v.evidencia_url && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, color: '#3B6D11', marginBottom: 4 }}>📸 Entrega registrada</div><img src={v.evidencia_url} alt="evidencia" style={{ width: '100%', borderRadius: 8, maxHeight: 150, objectFit: 'cover' }} /></div>}
+                  {v.evidencia_url && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: '#3B6D11', marginBottom: 4 }}>📸 Entrega registrada</div>
+                      <img src={v.evidencia_url} alt="evidencia" style={{ width: '100%', borderRadius: 8, maxHeight: 150, objectFit: 'cover' }} />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 6 }}>
                     {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => iniciarViaje(v)}>▶ Iniciar viaje</button>}
                     {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => setViajeEntrega(v)}>📸 Entregar</button>}
@@ -488,6 +455,7 @@ export default function App({ usuario, rol, onLogout }) {
               )
             })}
           </>}
+
           {viewC === 'gasolina' && (
             <div style={card}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>⛽ Registrar gasolina</div>
@@ -504,6 +472,7 @@ export default function App({ usuario, rol, onLogout }) {
               <button style={{ ...btnR, width: '100%', textAlign: 'center', padding: 12 }} onClick={async () => { setLoading(true); await supabase.from('gasolina').insert([gasForm]); setGasForm({}); setLoading(false); alert('✓ Guardado') }}>{loading ? 'Guardando...' : '✓ Guardar'}</button>
             </div>
           )}
+
           {viewC === 'incidencias' && (
             <div style={card}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>⚠️ Reportar incidencia</div>
@@ -522,11 +491,14 @@ export default function App({ usuario, rol, onLogout }) {
             </div>
           )}
         </div>
+
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: w, borderTop: br, display: 'flex' }}>
           {[['mis-viajes','📍','Viajes'],['gasolina','⛽','Gasolina'],['incidencias','⚠️','Incidencias']].map(([v,icon,lbl]) => (
             <div key={v} onClick={() => setViewC(v)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, padding: '8px 0', cursor: 'pointer', color: viewC === v ? r : m, fontSize: 10, fontWeight: viewC === v ? 600 : 400, position: 'relative' }}>
               <span style={{ fontSize: 20 }}>{icon}</span>{lbl}
-              {v === 'mis-viajes' && viajesNuevos.length > 0 && <span style={{ position: 'absolute', top: 4, right: '25%', background: '#185FA5', color: w, fontSize: 8, padding: '1px 5px', borderRadius: 10 }}>{viajesNuevos.length}</span>}
+              {v === 'mis-viajes' && viajesNuevos.length > 0 && (
+                <span style={{ position: 'absolute', top: 4, right: '25%', background: '#185FA5', color: w, fontSize: 8, padding: '1px 5px', borderRadius: 10 }}>{viajesNuevos.length}</span>
+              )}
             </div>
           ))}
         </div>
@@ -630,7 +602,9 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ fontSize: 12, color: m, marginBottom: 3 }}>📍 {v.origen} → {v.destino}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>👷 {chofer?.nombre || 'Sin asignar'}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>🚛 {camion?.economico || 'Sin camión'}</div>
-              <div style={{ fontSize: 11, color: m, marginBottom: !['entregado','cancelado'].includes(v.estatus) ? 10 : 0 }}>📅 {v.fecha}{v.hora ? ' — ⏰ ' + v.hora : ''}</div>
+              <div style={{ fontSize: 11, color: m, marginBottom: !['entregado','cancelado'].includes(v.estatus) ? 10 : 0 }}>
+                📅 {v.fecha}{v.hora ? ' — ⏰ ' + v.hora : ''}
+              </div>
               {!['entregado','cancelado'].includes(v.estatus) && <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
                 {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={e => { e.stopPropagation(); iniciarViaje(v) }}>▶ Iniciar</button>}
                 {v.estatus==='en_ruta'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={e => { e.stopPropagation(); setViajeEntrega(v) }}>📸 Entregar</button>}
@@ -650,7 +624,12 @@ export default function App({ usuario, rol, onLogout }) {
                 <td style={td}>{chofer?.nombre || <span style={{ color: m }}>Sin asignar</span>}</td>
                 <td style={td}>{camion?.economico || <span style={{ color: m }}>—</span>}</td>
                 <td style={td}>{v.fecha}{v.hora ? <div style={{ fontSize: 10, color: m }}>⏰ {v.hora}</div> : ''}</td>
-                <td style={td}><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>{v.evidencia_url && <span style={{ fontSize: 11, color: '#3B6D11' }}>📸</span>}{badge(v.estatus)}</div></td>
+                <td style={td}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {v.evidencia_url && <span style={{ fontSize: 11, color: '#3B6D11' }}>📸</span>}
+                    {badge(v.estatus)}
+                  </div>
+                </td>
                 <td style={td} onClick={e => e.stopPropagation()}>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {v.estatus==='programado'&&<button style={btnG} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
@@ -661,74 +640,6 @@ export default function App({ usuario, rol, onLogout }) {
                 <td style={td} onClick={e => e.stopPropagation()}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
               </tr>
             })}</tbody>
-          </table></div>
-        )}
-      </>}
-
-      {view === 'clientes' && <>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3,minmax(0,1fr))', gap: 10 }}>
-          {clientes.map(c => {
-            const viajesCliente = viajes.filter(v => v.cliente === c.nombre)
-            return <div key={c.id} style={{ ...card, padding: 12 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>🏢 {c.nombre}</div>
-              {c.contacto && <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>👤 {c.contacto}</div>}
-              {c.telefono && <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>📞 {c.telefono}</div>}
-              {c.email && <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>✉️ {c.email}</div>}
-              {c.direccion && <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>📍 {c.direccion}</div>}
-              <div style={{ background: '#F7F7F6', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-                <div style={{ fontSize: 11, color: m }}>Viajes realizados: <span style={{ fontWeight: 600, color: b }}>{viajesCliente.length}</span></div>
-              </div>
-              {c.notas && <div style={{ fontSize: 11, color: m, marginBottom: 8, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {c.notas}</div>}
-              <button style={{ ...btnD, width: '100%', textAlign: 'center' }} onClick={() => eliminar('clientes', c.id, '¿Eliminar a '+c.nombre+'?')}>🗑 Eliminar</button>
-            </div>
-          })}
-          {clientes.length === 0 && <div style={{ ...card, textAlign: 'center', color: m, padding: 30, gridColumn: '1/-1' }}>No hay clientes registrados</div>}
-        </div>
-      </>}
-
-      {view === 'gastos' && <>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4,minmax(0,1fr))', gap: 10, marginBottom: 14 }}>
-          <div style={{ background: w, border: br, borderRadius: 8, padding: 12 }}><div style={{ fontSize: 11, color: m, marginBottom: 5 }}>💸 Total gastos</div><div style={{ fontSize: 20, fontWeight: 600, color: r }}>${totalGastos.toLocaleString()}</div></div>
-          <div style={{ background: w, border: br, borderRadius: 8, padding: 12 }}><div style={{ fontSize: 11, color: m, marginBottom: 5 }}>📋 Registros</div><div style={{ fontSize: 20, fontWeight: 600 }}>{gastos.length}</div></div>
-          <div style={{ background: w, border: br, borderRadius: 8, padding: 12 }}><div style={{ fontSize: 11, color: m, marginBottom: 5 }}>⛽ Gasolina</div><div style={{ fontSize: 20, fontWeight: 600 }}>${totalGas.toLocaleString()}</div></div>
-          <div style={{ background: w, border: br, borderRadius: 8, padding: 12 }}><div style={{ fontSize: 11, color: m, marginBottom: 5 }}>📊 Total operativo</div><div style={{ fontSize: 20, fontWeight: 600, color: r }}>${(totalGastos + totalGas).toLocaleString()}</div></div>
-        </div>
-        {isMobile ? (
-          <div>{gastos.map(g => {
-            const cam = camiones.find(c => c.id === g.camion_id)
-            const viaje = viajes.find(v => v.id === g.viaje_id)
-            return <div key={g.id} style={{ ...card, marginBottom: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <span style={{ fontWeight: 600, textTransform: 'capitalize' }}>{g.tipo}</span>
-                <span style={{ fontWeight: 600, color: r }}>${Number(g.monto).toLocaleString()}</span>
-              </div>
-              <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>📅 {g.fecha}</div>
-              {cam && <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>🚛 {cam.economico}</div>}
-              {viaje && <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>📍 {viaje.folio}</div>}
-              {g.descripcion && <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>📝 {g.descripcion}</div>}
-              <button style={{ ...btnD, fontSize: 11 }} onClick={() => eliminar('gastos', g.id, '¿Eliminar este gasto?')}>🗑 Eliminar</button>
-            </div>
-          })}
-          {gastos.length === 0 && <div style={{ ...card, textAlign: 'center', color: m, padding: 30 }}>No hay gastos registrados</div>}
-          </div>
-        ) : (
-          <div style={card}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead><tr><th style={th}>Tipo</th><th style={th}>Monto</th><th style={th}>Fecha</th><th style={th}>Unidad</th><th style={th}>Viaje</th><th style={th}>Descripción</th><th style={th}></th></tr></thead>
-            <tbody>{gastos.map(g => {
-              const cam = camiones.find(c => c.id === g.camion_id)
-              const viaje = viajes.find(v => v.id === g.viaje_id)
-              return <tr key={g.id}>
-                <td style={{ ...td, textTransform: 'capitalize', fontWeight: 500 }}>{g.tipo}</td>
-                <td style={{ ...td, fontWeight: 600, color: r }}>${Number(g.monto).toLocaleString()}</td>
-                <td style={td}>{g.fecha}</td>
-                <td style={td}>{cam?.economico || '—'}</td>
-                <td style={td}>{viaje?.folio || '—'}</td>
-                <td style={td}>{g.descripcion || '—'}</td>
-                <td style={td}><button style={btnD} onClick={() => eliminar('gastos', g.id, '¿Eliminar este gasto?')}>🗑</button></td>
-              </tr>
-            })}
-            {gastos.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: m, padding: 20 }}>No hay gastos registrados</td></tr>}
-            </tbody>
           </table></div>
         )}
       </>}
@@ -789,7 +700,7 @@ export default function App({ usuario, rol, onLogout }) {
       </div>}
 
       {view === 'reportes' && <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(3,minmax(0,1fr))', gap: 10 }}>
-        {[['📍',viajes.length,'Viajes totales'],['✅',viajes.filter(v=>v.estatus==='entregado').length,'Entregados'],['📄',facturas.length,'Facturas'],['💰','$'+facturas.filter(f=>f.estatus==='cobrada').reduce((a,f)=>a+Number(f.monto||0),0).toLocaleString(),'Cobrado'],['⛽','$'+totalGas.toLocaleString(),'Gasolina'],['💸','$'+totalGastos.toLocaleString(),'Otros gastos'],['🏢',clientes.length,'Clientes'],['🚛',camiones.length,'Unidades']].map(([i,v,l])=><div key={l} style={{ ...card, textAlign: 'center' }}><div style={{ fontSize: 22, color: r, marginBottom: 6 }}>{i}</div><div style={{ fontSize: 18, fontWeight: 600 }}>{v}</div><div style={{ fontSize: 10, color: m }}>{l}</div></div>)}
+        {[['📍',viajes.length,'Viajes totales'],['✅',viajes.filter(v=>v.estatus==='entregado').length,'Entregados'],['📄',facturas.length,'Facturas'],['💰','$'+facturas.filter(f=>f.estatus==='cobrada').reduce((a,f)=>a+Number(f.monto||0),0).toLocaleString(),'Cobrado'],['⛽','$'+totalGas.toLocaleString(),'Gasolina'],['🚛',camiones.length,'Unidades']].map(([i,v,l])=><div key={l} style={{ ...card, textAlign: 'center' }}><div style={{ fontSize: 22, color: r, marginBottom: 6 }}>{i}</div><div style={{ fontSize: 18, fontWeight: 600 }}>{v}</div><div style={{ fontSize: 10, color: m }}>{l}</div></div>)}
       </div>}
     </div>
   )
@@ -809,8 +720,6 @@ export default function App({ usuario, rol, onLogout }) {
             {view === 'flota' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => setModal('camion')}>+ Unidad</button>}
             {view === 'choferes' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => { loadUsuarios(); setModal('chofer') }}>+ Chofer</button>}
             {view === 'facturas' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => setModal('factura')}>+ Factura</button>}
-            {view === 'clientes' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => setModal('cliente')}>+ Cliente</button>}
-            {view === 'gastos' && <button style={{ ...btnR, fontSize: 11, padding: '5px 10px' }} onClick={() => setModal('gasto')}>+ Gasto</button>}
           </div>
         </div>
 
@@ -832,7 +741,7 @@ export default function App({ usuario, rol, onLogout }) {
                 </div>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-                {[['Principal', navLinks.slice(0,1)], ['Operaciones', navLinks.slice(1,4)], ['Finanzas', navLinks.slice(4,6)], ['Administrativo', navLinks.slice(6,8)], ['Gestión', navLinks.slice(8)]].map(([section, links]) => (
+                {[['Principal', navLinks.slice(0,1)], ['Operaciones', navLinks.slice(1,4)], ['Finanzas', navLinks.slice(4,6)], ['Gestión', navLinks.slice(6)]].map(([section, links]) => (
                   <div key={section}>
                     <div style={{ fontSize: 10, fontWeight: 600, color: '#9E9E9B', padding: '10px 16px 4px', textTransform: 'uppercase', letterSpacing: .7 }}>{section}</div>
                     {links.map(({ v, icon, label, count }) => (
@@ -874,7 +783,7 @@ export default function App({ usuario, rol, onLogout }) {
           <div><div style={{ fontSize: 11, fontWeight: 500 }}>{usuario?.email?.split('@')[0]}</div><div style={{ fontSize: 10, color: m }}>Administrador</div></div>
         </div>
         <div style={{ padding: '8px 0', flex: 1, overflowY: 'auto' }}>
-          {[['Principal', navLinks.slice(0,1)], ['Operaciones', navLinks.slice(1,4)], ['Finanzas', navLinks.slice(4,6)], ['Administrativo', navLinks.slice(6,8)], ['Gestión', navLinks.slice(8)]].map(([section, links]) => (
+          {[['Principal', navLinks.slice(0,1)], ['Operaciones', navLinks.slice(1,4)], ['Finanzas', navLinks.slice(4,6)], ['Gestión', navLinks.slice(6)]].map(([section, links]) => (
             <div key={section}>
               <div style={{ fontSize: 9, fontWeight: 600, color: '#9E9E9B', padding: '10px 14px 4px', textTransform: 'uppercase', letterSpacing: .7 }}>{section}</div>
               {links.map(({v, icon, label, count}) => (
@@ -898,8 +807,6 @@ export default function App({ usuario, rol, onLogout }) {
             {view === 'flota' && <button style={btnR} onClick={() => setModal('camion')}>+ Agregar unidad</button>}
             {view === 'choferes' && <button style={btnR} onClick={() => { loadUsuarios(); setModal('chofer') }}>+ Agregar chofer</button>}
             {view === 'facturas' && <button style={btnR} onClick={() => setModal('factura')}>+ Nueva factura</button>}
-            {view === 'clientes' && <button style={btnR} onClick={() => setModal('cliente')}>+ Nuevo cliente</button>}
-            {view === 'gastos' && <button style={btnR} onClick={() => setModal('gasto')}>+ Registrar gasto</button>}
             <div style={{ width: 28, height: 28, borderRadius: '50%', background: r, color: w, fontSize: 10, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{usuario?.email?.[0]?.toUpperCase()}</div>
           </div>
         </div>
