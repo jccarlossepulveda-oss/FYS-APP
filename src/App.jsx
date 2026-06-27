@@ -46,9 +46,7 @@ export default function App({ usuario, rol, onLogout }) {
       if (b.data) setChoferes(b.data)
       if (c.data) {
         setViajes(c.data)
-        // Notificación: viajes programados que el chofer aún no ha visto
-        const nuevos = c.data.filter(v => v.estatus === 'programado')
-        setViajesNuevos(nuevos)
+        setViajesNuevos(c.data.filter(v => v.estatus === 'programado'))
       }
     } else {
       const [a, b, c, d, e] = await Promise.all([
@@ -63,6 +61,27 @@ export default function App({ usuario, rol, onLogout }) {
       if (c.data) setViajes(c.data)
       if (d.data) setFacturas(d.data)
       if (e.data) setGasolina(e.data)
+
+      // Sincronizar estatus de camiones con viajes activos
+      if (a.data && c.data) {
+        sincronizarCamiones(a.data, c.data)
+      }
+    }
+  }
+
+  // Sincroniza el estatus de camiones basándose en viajes activos
+  async function sincronizarCamiones(listaCamiones, listaViajes) {
+    const camionesEnRuta = new Set(
+      listaViajes
+        .filter(v => v.estatus === 'en_ruta' && v.camion_id)
+        .map(v => v.camion_id)
+    )
+    for (const camion of listaCamiones) {
+      if (camionesEnRuta.has(camion.id) && camion.estatus !== 'en_ruta') {
+        await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', camion.id)
+      } else if (!camionesEnRuta.has(camion.id) && camion.estatus === 'en_ruta') {
+        await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', camion.id)
+      }
     }
   }
 
@@ -72,7 +91,20 @@ export default function App({ usuario, rol, onLogout }) {
   }
 
   async function eliminar(tabla, id, msg) {
-    setConfirmar({ msg, fn: async () => { await supabase.from(tabla).delete().eq('id', id); await load(); setConfirmar(null) } })
+    setConfirmar({
+      msg, fn: async () => {
+        // Si se elimina un viaje, liberar el camión
+        if (tabla === 'viajes') {
+          const viaje = viajes.find(v => v.id === id)
+          if (viaje?.camion_id && viaje.estatus !== 'entregado' && viaje.estatus !== 'cancelado') {
+            await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', viaje.camion_id)
+          }
+        }
+        await supabase.from(tabla).delete().eq('id', id)
+        await load()
+        setConfirmar(null)
+      }
+    })
   }
 
   async function crearChofer() {
@@ -95,7 +127,7 @@ export default function App({ usuario, rol, onLogout }) {
   async function crearViaje() {
     setLoading(true)
     try {
-      // Bloqueo por día: el camión no puede tener otro viaje activo el mismo día
+      // Bloqueo por día
       if (form.camion_id && form.fecha) {
         const { data: viajeActivo } = await supabase
           .from('viajes').select('id')
@@ -109,18 +141,12 @@ export default function App({ usuario, rol, onLogout }) {
           return
         }
       }
+      // Crear viaje — el camión NO cambia de estatus aquí, solo al iniciar
       await supabase.from('viajes').insert([{
         ...form,
         folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'),
         estatus: 'programado'
       }])
-      // Solo poner en_ruta el camión si el viaje es hoy
-      if (form.camion_id && form.fecha) {
-        const hoy = new Date().toISOString().split('T')[0]
-        if (form.fecha === hoy) {
-          await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', form.camion_id)
-        }
-      }
       await load(); setModal(null); setForm({})
     } catch (e) { alert('Error: ' + e.message) }
     setLoading(false)
@@ -128,12 +154,16 @@ export default function App({ usuario, rol, onLogout }) {
 
   async function cancelarViaje(v) {
     await supabase.from('viajes').update({ estatus: 'cancelado' }).eq('id', v.id)
-    if (v.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
+    // Solo liberar camión si estaba en ruta
+    if (v.camion_id && v.estatus === 'en_ruta') {
+      await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
+    }
     await load()
   }
 
   async function iniciarViaje(v) {
     await supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id)
+    // El camión se marca en ruta SOLO cuando el chofer inicia
     if (v.camion_id) await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', v.camion_id)
     await load()
   }
@@ -152,7 +182,7 @@ export default function App({ usuario, rol, onLogout }) {
       await load()
       setViajeEntrega(null)
       setFotoEvidencia(null)
-      alert('✓ Entrega registrada con evidencia')
+      alert('✓ Entrega registrada')
     } catch (e) { alert('Error: ' + e.message) }
     setLoading(false)
   }
@@ -209,7 +239,6 @@ export default function App({ usuario, rol, onLogout }) {
     { v: 'reportes', icon: '📊', label: 'Reportes' },
   ]
 
-  // Modal entrega con foto
   const entregaModal = viajeEntrega && (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
       <div style={{ background: w, borderRadius: 12, padding: 20, width: 'calc(100% - 32px)', maxWidth: 400, margin: '40px auto 40px' }}>
@@ -238,7 +267,6 @@ export default function App({ usuario, rol, onLogout }) {
     </div>
   )
 
-  // Modal detalle viaje
   const detalleModal = viajeDetalle && (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }} onClick={e => e.target === e.currentTarget && setViajeDetalle(null)}>
       <div style={{ background: w, borderRadius: 12, padding: 20, width: 'calc(100% - 32px)', maxWidth: 400, margin: '40px auto 40px', position: 'relative' }}>
@@ -249,7 +277,7 @@ export default function App({ usuario, rol, onLogout }) {
         <div style={{ fontSize: 12, color: m, marginBottom: 6 }}>📍 {viajeDetalle.origen} → {viajeDetalle.destino}</div>
         <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>👷 {choferes.find(c => c.id === viajeDetalle.chofer_id)?.nombre || '—'}</div>
         <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>🚛 {camiones.find(c => c.id === viajeDetalle.camion_id)?.economico || '—'}</div>
-        <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>📅 {viajeDetalle.fecha}{viajeDetalle.hora ? ' — ⏰ ' + viajeDetalle.hora : ''}</div>
+        <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>📅 {viajeDetalle.fecha}{viajeDetalle.hora ? ' — ⏰ ' + viajeDetalle.hora : ''}</div>
         {viajeDetalle.notas && <div style={{ fontSize: 11, color: m, marginBottom: 16, background: '#F7F7F6', borderRadius: 6, padding: '8px 10px' }}>📝 {viajeDetalle.notas}</div>}
         {viajeDetalle.evidencia_url && <>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📸 Evidencia de entrega</div>
@@ -284,7 +312,7 @@ export default function App({ usuario, rol, onLogout }) {
           <div><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>Camión</label>
             <select style={inp} onChange={e => setForm({ ...form, camion_id: e.target.value })}>
               <option value="">Seleccionar...</option>
-              {camiones.filter(c => c.estatus === 'disponible').map(c => <option key={c.id} value={c.id}>{c.economico}</option>)}
+              {camiones.map(c => <option key={c.id} value={c.id}>{c.economico} — {c.estatus === 'en_ruta' ? '🔴 En ruta' : '🟢 Disponible'}</option>)}
             </select>
           </div>
           <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={crearViaje}>
@@ -383,13 +411,12 @@ export default function App({ usuario, rol, onLogout }) {
           <button onClick={onLogout} style={{ background: 'rgba(255,255,255,0.2)', color: w, border: 'none', padding: '5px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>Salir</button>
         </div>
 
-        {/* Notificación de viajes nuevos */}
         {viajesNuevos.length > 0 && viewC === 'mis-viajes' && (
           <div style={{ background: '#E6F1FB', borderBottom: '1px solid #B8D4F0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 18 }}>🔔</span>
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, color: '#185FA5' }}>
-                {viajesNuevos.length === 1 ? 'Tienes un viaje nuevo asignado' : `Tienes ${viajesNuevos.length} viajes nuevos asignados`}
+                {viajesNuevos.length === 1 ? 'Tienes un viaje nuevo asignado' : `Tienes ${viajesNuevos.length} viajes nuevos`}
               </div>
               <div style={{ fontSize: 11, color: '#185FA5' }}>Revisa los detalles abajo</div>
             </div>
@@ -412,9 +439,7 @@ export default function App({ usuario, rol, onLogout }) {
                   <div style={{ fontSize: 12, marginBottom: 4 }}>📦 {v.cliente}</div>
                   <div style={{ fontSize: 12, color: m, marginBottom: 4 }}>📍 {v.origen} → {v.destino}</div>
                   {cam && <div style={{ fontSize: 11, color: m, marginBottom: 4 }}>🚛 {cam.economico}</div>}
-                  <div style={{ fontSize: 11, color: m, marginBottom: v.notas ? 4 : 10 }}>
-                    📅 {v.fecha}{v.hora ? ' — ⏰ ' + v.hora : ''}
-                  </div>
+                  <div style={{ fontSize: 11, color: m, marginBottom: v.notas ? 4 : 10 }}>📅 {v.fecha}{v.hora ? ' — ⏰ ' + v.hora : ''}</div>
                   {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
                   {v.evidencia_url && (
                     <div style={{ marginBottom: 10 }}>
@@ -577,7 +602,7 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ fontSize: 12, color: m, marginBottom: 3 }}>📍 {v.origen} → {v.destino}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>👷 {chofer?.nombre || 'Sin asignar'}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>🚛 {camion?.economico || 'Sin camión'}</div>
-              <div style={{ fontSize: 11, color: m, marginBottom: v.estatus === 'entregado' || v.estatus === 'cancelado' ? 0 : 10 }}>
+              <div style={{ fontSize: 11, color: m, marginBottom: !['entregado','cancelado'].includes(v.estatus) ? 10 : 0 }}>
                 📅 {v.fecha}{v.hora ? ' — ⏰ ' + v.hora : ''}
               </div>
               {!['entregado','cancelado'].includes(v.estatus) && <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
