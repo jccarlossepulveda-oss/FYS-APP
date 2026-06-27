@@ -122,19 +122,12 @@ export default function App({ usuario, rol, onLogout }) {
       if (archivoFactura) {
         const ext = archivoFactura.name.split('.').pop()
         const nombre = `factura-${Date.now()}.${ext}`
-        const { error: uploadError } = await supabase.storage
-          .from('facturas')
-          .upload(nombre, archivoFactura)
+        const { error: uploadError } = await supabase.storage.from('facturas').upload(nombre, archivoFactura)
         if (uploadError) throw uploadError
         const { data: urlData } = supabase.storage.from('facturas').getPublicUrl(nombre)
         archivo_url = urlData.publicUrl
       }
-      await supabase.from('facturas').insert([{
-        ...form,
-        folio: 'FYS-' + String(facturas.length + 101).padStart(4, '0'),
-        estatus: 'pendiente',
-        archivo_url
-      }])
+      await supabase.from('facturas').insert([{ ...form, folio: 'FYS-' + String(facturas.length + 101).padStart(4, '0'), estatus: 'pendiente', archivo_url }])
       await load(); setModal(null); setForm({}); setArchivoFactura(null)
     } catch (e) { alert('Error: ' + e.message) }
     setLoading(false)
@@ -158,9 +151,7 @@ export default function App({ usuario, rol, onLogout }) {
 
   const vAct = viajes.filter(v => ['en_ruta', 'cargando'].includes(v.estatus)).length
   const fPend = facturas.filter(f => f.estatus === 'pendiente')
-  const vF = viajes
-    .filter(v => filtroV === 'todos' || v.estatus === filtroV)
-    .filter(v => filtroChofer === 'todos' || v.chofer_id === filtroChofer)
+  const vF = viajes.filter(v => filtroV === 'todos' || v.estatus === filtroV).filter(v => filtroChofer === 'todos' || v.chofer_id === filtroChofer)
   const fF = filtroF === 'todas' ? facturas : facturas.filter(f => f.estatus === filtroF)
   const totalGas = gasolina.reduce((a, g) => a + Number(g.monto || 0), 0)
   const viewTitle = { inicio: 'Inicio', flota: 'Flota', choferes: 'Choferes', viajes: 'Viajes', gasolina: 'Gasolina', facturas: 'Facturas', mantenimiento: 'Mantenimiento', reportes: 'Reportes' }
@@ -247,12 +238,8 @@ export default function App({ usuario, rol, onLogout }) {
 
         {modal === 'historial' && historialChofer && <>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>📋 Historial de {historialChofer.nombre}</div>
-          <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>
-            {viajes.filter(v => v.chofer_id === historialChofer.id).length} viajes en total
-          </div>
-          {viajes.filter(v => v.chofer_id === historialChofer.id).length === 0 && (
-            <div style={{ textAlign: 'center', color: m, padding: 20 }}>Sin viajes registrados</div>
-          )}
+          <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>{viajes.filter(v => v.chofer_id === historialChofer.id).length} viajes en total</div>
+          {viajes.filter(v => v.chofer_id === historialChofer.id).length === 0 && <div style={{ textAlign: 'center', color: m, padding: 20 }}>Sin viajes registrados</div>}
           {viajes.filter(v => v.chofer_id === historialChofer.id).map(v => (
             <div key={v.id} style={{ borderBottom: br, paddingBottom: 10, marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -297,21 +284,25 @@ export default function App({ usuario, rol, onLogout }) {
           {viewC === 'mis-viajes' && <>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, color: m }}>Mis viajes</div>
             {viajes.length === 0 && <div style={{ ...card, textAlign: 'center', color: m, padding: 30 }}>No tienes viajes asignados</div>}
-            {viajes.map(v => (
-              <div key={v.id} style={{ ...card, marginBottom: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <span style={{ fontWeight: 600 }}>{v.folio}</span>{badge(v.estatus)}
+            {viajes.map(v => {
+              const cam = camiones.find(c => c.id === v.camion_id)
+              return (
+                <div key={v.id} style={{ ...card, marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontWeight: 600 }}>{v.folio}</span>{badge(v.estatus)}
+                  </div>
+                  <div style={{ fontSize: 12, marginBottom: 4 }}>📦 {v.cliente}</div>
+                  <div style={{ fontSize: 12, color: m, marginBottom: 4 }}>📍 {v.origen} → {v.destino}</div>
+                  {cam && <div style={{ fontSize: 11, color: m, marginBottom: 4 }}>🚛 {cam.economico}</div>}
+                  <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
+                  {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => iniciarViaje(v)}>▶ Iniciar viaje</button>}
+                    {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => entregarViaje(v)}>✓ Marcar entregado</button>}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, marginBottom: 4 }}>📦 {v.cliente}</div>
-                <div style={{ fontSize: 12, color: m, marginBottom: 8 }}>📍 {v.origen} → {v.destino}</div>
-                <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
-                {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => iniciarViaje(v)}>▶ Iniciar viaje</button>}
-                  {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => entregarViaje(v)}>✓ Marcar entregado</button>}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </>}
           {viewC === 'gasolina' && (
             <div style={card}>
@@ -440,7 +431,7 @@ export default function App({ usuario, rol, onLogout }) {
         <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
           {['todos','programado','en_ruta','entregado','cancelado'].map(f=><button key={f} onClick={()=>setFiltroV(f)} style={{ padding: '6px 12px', borderRadius: 20, fontSize: 11, cursor: 'pointer', background: filtroV===f?r:w, color: filtroV===f?w:m, border: filtroV===f?'1px solid '+r:br }}>{f==='todos'?'Todos':f==='en_ruta'?'En ruta':f.charAt(0).toUpperCase()+f.slice(1)}</button>)}
         </div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ marginBottom: 12 }}>
           <select style={{ padding: '6px 10px', borderRadius: 8, fontSize: 11, border: br, background: w, color: b }} value={filtroChofer} onChange={e => setFiltroChofer(e.target.value)}>
             <option value="todos">Todos los choferes</option>
             {choferes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
@@ -449,6 +440,7 @@ export default function App({ usuario, rol, onLogout }) {
         {isMobile ? (
           <div>{vF.map(v => {
             const chofer = choferes.find(c => c.id === v.chofer_id)
+            const camion = camiones.find(c => c.id === v.camion_id)
             return <div key={v.id} style={{ ...card, marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                 <span style={{ fontWeight: 600 }}>{v.folio}</span>{badge(v.estatus)}
@@ -456,6 +448,7 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ fontSize: 12, marginBottom: 3 }}>📦 {v.cliente}</div>
               <div style={{ fontSize: 12, color: m, marginBottom: 3 }}>📍 {v.origen} → {v.destino}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>👷 {chofer?.nombre || 'Sin asignar'}</div>
+              <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>🚛 {camion?.economico || 'Sin camión'}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
               <div style={{ display: 'flex', gap: 6 }}>
                 {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
@@ -467,12 +460,14 @@ export default function App({ usuario, rol, onLogout }) {
           })}</div>
         ) : (
           <div style={card}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead><tr><th style={th}>Folio</th><th style={th}>Cliente</th><th style={th}>Ruta</th><th style={th}>Chofer</th><th style={th}>Fecha</th><th style={th}>Estatus</th><th style={th}>Acción</th><th style={th}></th></tr></thead>
+            <thead><tr><th style={th}>Folio</th><th style={th}>Cliente</th><th style={th}>Ruta</th><th style={th}>Chofer</th><th style={th}>Camión</th><th style={th}>Fecha</th><th style={th}>Estatus</th><th style={th}>Acción</th><th style={th}></th></tr></thead>
             <tbody>{vF.map(v=>{
               const chofer = choferes.find(c => c.id === v.chofer_id)
+              const camion = camiones.find(c => c.id === v.camion_id)
               return <tr key={v.id}>
                 <td style={{ ...td, fontWeight: 600 }}>{v.folio}</td><td style={td}>{v.cliente}</td><td style={td}>{v.origen}→{v.destino}</td>
                 <td style={td}>{chofer?.nombre || <span style={{ color: m }}>Sin asignar</span>}</td>
+                <td style={td}>{camion?.economico || <span style={{ color: m }}>—</span>}</td>
                 <td style={td}>{v.fecha}</td><td style={td}>{badge(v.estatus)}</td>
                 <td style={td}>
                   <div style={{ display: 'flex', gap: 4 }}>
@@ -512,10 +507,7 @@ export default function App({ usuario, rol, onLogout }) {
             <tbody>{fF.map(f=><tr key={f.id}>
               <td style={{ ...td, fontWeight: 600 }}>{f.folio}</td><td style={td}>{f.cliente}</td><td style={td}>{f.fecha}</td><td style={{ ...td, fontWeight: 600 }}>${Number(f.monto||0).toLocaleString()}</td><td style={td}>{f.fecha_vence}</td><td style={td}>{badge(f.estatus)}</td>
               <td style={td}>{f.archivo_url ? <a href={f.archivo_url} target="_blank" rel="noreferrer" style={{ color: r, fontSize: 11 }}>📎 Ver</a> : <span style={{ color: m, fontSize: 11 }}>—</span>}</td>
-              <td style={td}>
-                {f.estatus==='pendiente'&&<button style={{ ...btnR, fontSize: 10, padding: '3px 8px', marginRight: 4 }} onClick={async()=>{ await supabase.from('facturas').update({estatus:'cobrada'}).eq('id',f.id); await load() }}>✓ Cobrar</button>}
-                <button style={btnD} onClick={()=>eliminar('facturas',f.id,'¿Eliminar '+f.folio+'?')}>🗑</button>
-              </td>
+              <td style={td}>{f.estatus==='pendiente'&&<button style={{ ...btnR, fontSize: 10, padding: '3px 8px', marginRight: 4 }} onClick={async()=>{ await supabase.from('facturas').update({estatus:'cobrada'}).eq('id',f.id); await load() }}>✓ Cobrar</button>}<button style={btnD} onClick={()=>eliminar('facturas',f.id,'¿Eliminar '+f.folio+'?')}>🗑</button></td>
             </tr>)}</tbody>
           </table></div>
         )}
