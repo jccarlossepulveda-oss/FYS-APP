@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabase'
 
 export default function App({ usuario, rol, onLogout }) {
@@ -22,6 +22,10 @@ export default function App({ usuario, rol, onLogout }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [historialChofer, setHistorialChofer] = useState(null)
   const [archivoFactura, setArchivoFactura] = useState(null)
+  const [viajeEntrega, setViajeEntrega] = useState(null)
+  const [fotoEvidencia, setFotoEvidencia] = useState(null)
+  const [viajeDetalle, setViajeDetalle] = useState(null)
+  const fileRef = useRef()
 
   useEffect(() => {
     load()
@@ -104,15 +108,28 @@ export default function App({ usuario, rol, onLogout }) {
     await load()
   }
 
-  async function entregarViaje(v) {
-    await supabase.from('viajes').update({ estatus: 'entregado' }).eq('id', v.id)
-    if (v.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
-    await load()
-  }
-
   async function iniciarViaje(v) {
     await supabase.from('viajes').update({ estatus: 'en_ruta' }).eq('id', v.id)
     await load()
+  }
+
+  async function confirmarEntrega() {
+    if (!fotoEvidencia) { alert('Toma una foto de evidencia para continuar'); return }
+    setLoading(true)
+    try {
+      const ext = fotoEvidencia.name.split('.').pop()
+      const nombre = `evidencia-${viajeEntrega.id}-${Date.now()}.${ext}`
+      const { error: uploadError } = await supabase.storage.from('evidencias').upload(nombre, fotoEvidencia)
+      if (uploadError) throw uploadError
+      const { data: urlData } = supabase.storage.from('evidencias').getPublicUrl(nombre)
+      await supabase.from('viajes').update({ estatus: 'entregado', evidencia_url: urlData.publicUrl }).eq('id', viajeEntrega.id)
+      if (viajeEntrega.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', viajeEntrega.camion_id)
+      await load()
+      setViajeEntrega(null)
+      setFotoEvidencia(null)
+      alert('✓ Entrega registrada con evidencia')
+    } catch (e) { alert('Error: ' + e.message) }
+    setLoading(false)
   }
 
   async function crearFactura() {
@@ -166,6 +183,63 @@ export default function App({ usuario, rol, onLogout }) {
     { v: 'mantenimiento', icon: '🔧', label: 'Mantenimiento' },
     { v: 'reportes', icon: '📊', label: 'Reportes' },
   ]
+
+  // Modal de entrega con foto
+  const entregaModal = viajeEntrega && (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <div style={{ background: w, borderRadius: 12, padding: 20, width: 'calc(100% - 32px)', maxWidth: 400, margin: '40px auto 40px' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>📸 Evidencia de entrega</div>
+        <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>{viajeEntrega.folio} — {viajeEntrega.cliente}</div>
+        <div style={{ marginBottom: 16 }}>
+          <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => setFotoEvidencia(e.target.files[0])} />
+          {fotoEvidencia ? (
+            <div>
+              <img src={URL.createObjectURL(fotoEvidencia)} alt="evidencia" style={{ width: '100%', borderRadius: 8, marginBottom: 8, maxHeight: 200, objectFit: 'cover' }} />
+              <button style={{ ...btnG, width: '100%', textAlign: 'center', padding: 10 }} onClick={() => fileRef.current.click()}>📷 Cambiar foto</button>
+            </div>
+          ) : (
+            <button style={{ ...btnG, width: '100%', textAlign: 'center', padding: 16, border: '2px dashed #E0DFDC', borderRadius: 10 }} onClick={() => fileRef.current.click()}>
+              <div style={{ fontSize: 32, marginBottom: 6 }}>📷</div>
+              <div style={{ fontSize: 13 }}>Tomar foto o seleccionar</div>
+              <div style={{ fontSize: 11, color: m, marginTop: 2 }}>Foto de la mercancía entregada</div>
+            </button>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={{ ...btnG, flex: 1, padding: 12, textAlign: 'center' }} onClick={() => { setViajeEntrega(null); setFotoEvidencia(null) }}>Cancelar</button>
+          <button style={{ ...btnR, flex: 2, padding: 12, textAlign: 'center' }} onClick={confirmarEntrega}>
+            {loading ? 'Subiendo...' : '✓ Confirmar entrega'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+
+  // Modal de detalle de viaje (para ver evidencia)
+  const detalleModal = viajeDetalle && (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }} onClick={e => e.target === e.currentTarget && setViajeDetalle(null)}>
+      <div style={{ background: w, borderRadius: 12, padding: 20, width: 'calc(100% - 32px)', maxWidth: 400, margin: '40px auto 40px', position: 'relative' }}>
+        <button onClick={() => setViajeDetalle(null)} style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: m }}>✕</button>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{viajeDetalle.folio}</div>
+        <div style={{ marginBottom: 16 }}>{badge(viajeDetalle.estatus)}</div>
+        <div style={{ fontSize: 12, marginBottom: 6 }}>📦 {viajeDetalle.cliente}</div>
+        <div style={{ fontSize: 12, color: m, marginBottom: 6 }}>📍 {viajeDetalle.origen} → {viajeDetalle.destino}</div>
+        <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>👷 {choferes.find(c => c.id === viajeDetalle.chofer_id)?.nombre || '—'}</div>
+        <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>🚛 {camiones.find(c => c.id === viajeDetalle.camion_id)?.economico || '—'}</div>
+        <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>📅 {viajeDetalle.fecha}</div>
+        {viajeDetalle.notas && <div style={{ fontSize: 11, color: m, marginBottom: 16, background: '#F7F7F6', borderRadius: 6, padding: '8px 10px' }}>📝 {viajeDetalle.notas}</div>}
+        {viajeDetalle.evidencia_url && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📸 Evidencia de entrega</div>
+            <img src={viajeDetalle.evidencia_url} alt="evidencia" style={{ width: '100%', borderRadius: 8, objectFit: 'cover' }} />
+          </div>
+        )}
+        {!viajeDetalle.evidencia_url && viajeDetalle.estatus === 'entregado' && (
+          <div style={{ fontSize: 11, color: m, textAlign: 'center', padding: 16, background: '#F7F7F6', borderRadius: 8 }}>Sin evidencia registrada</div>
+        )}
+      </div>
+    </div>
+  )
 
   const modalContent = modal && (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }} onClick={e => e.target === e.currentTarget && setModal(null)}>
@@ -241,13 +315,16 @@ export default function App({ usuario, rol, onLogout }) {
           <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>{viajes.filter(v => v.chofer_id === historialChofer.id).length} viajes en total</div>
           {viajes.filter(v => v.chofer_id === historialChofer.id).length === 0 && <div style={{ textAlign: 'center', color: m, padding: 20 }}>Sin viajes registrados</div>}
           {viajes.filter(v => v.chofer_id === historialChofer.id).map(v => (
-            <div key={v.id} style={{ borderBottom: br, paddingBottom: 10, marginBottom: 10 }}>
+            <div key={v.id} style={{ borderBottom: br, paddingBottom: 10, marginBottom: 10, cursor: 'pointer' }} onClick={() => { setModal(null); setViajeDetalle(v) }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontWeight: 600, fontSize: 12 }}>{v.folio}</span>{badge(v.estatus)}
               </div>
               <div style={{ fontSize: 12, marginBottom: 2 }}>📦 {v.cliente}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>📍 {v.origen} → {v.destino}</div>
-              <div style={{ fontSize: 11, color: m }}>📅 {v.fecha}</div>
+              <div style={{ fontSize: 11, color: m, display: 'flex', justifyContent: 'space-between' }}>
+                <span>📅 {v.fecha}</span>
+                {v.evidencia_url && <span style={{ color: '#3B6D11' }}>📸 Con evidencia</span>}
+              </div>
             </div>
           ))}
         </>}
@@ -296,9 +373,15 @@ export default function App({ usuario, rol, onLogout }) {
                   {cam && <div style={{ fontSize: 11, color: m, marginBottom: 4 }}>🚛 {cam.economico}</div>}
                   <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
                   {v.notas && <div style={{ fontSize: 11, color: m, marginBottom: 10, background: '#F7F7F6', borderRadius: 6, padding: '6px 8px' }}>📝 {v.notas}</div>}
+                  {v.evidencia_url && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: '#3B6D11', marginBottom: 4 }}>📸 Entrega registrada</div>
+                      <img src={v.evidencia_url} alt="evidencia" style={{ width: '100%', borderRadius: 8, maxHeight: 150, objectFit: 'cover' }} />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 6 }}>
                     {v.estatus === 'programado' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => iniciarViaje(v)}>▶ Iniciar viaje</button>}
-                    {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => entregarViaje(v)}>✓ Marcar entregado</button>}
+                    {v.estatus === 'en_ruta' && <button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 10 }} onClick={() => setViajeEntrega(v)}>📸 Entregar</button>}
                   </div>
                 </div>
               )
@@ -345,6 +428,7 @@ export default function App({ usuario, rol, onLogout }) {
             </div>
           ))}
         </div>
+        {entregaModal}
       </div>
     )
   }
@@ -441,21 +525,25 @@ export default function App({ usuario, rol, onLogout }) {
           <div>{vF.map(v => {
             const chofer = choferes.find(c => c.id === v.chofer_id)
             const camion = camiones.find(c => c.id === v.camion_id)
-            return <div key={v.id} style={{ ...card, marginBottom: 10 }}>
+            return <div key={v.id} style={{ ...card, marginBottom: 10 }} onClick={() => v.estatus === 'entregado' && setViajeDetalle(v)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <span style={{ fontWeight: 600 }}>{v.folio}</span>{badge(v.estatus)}
+                <span style={{ fontWeight: 600 }}>{v.folio}</span>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  {v.evidencia_url && <span style={{ fontSize: 10, color: '#3B6D11' }}>📸</span>}
+                  {badge(v.estatus)}
+                </div>
               </div>
               <div style={{ fontSize: 12, marginBottom: 3 }}>📦 {v.cliente}</div>
               <div style={{ fontSize: 12, color: m, marginBottom: 3 }}>📍 {v.origen} → {v.destino}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>👷 {chofer?.nombre || 'Sin asignar'}</div>
               <div style={{ fontSize: 11, color: m, marginBottom: 3 }}>🚛 {camion?.economico || 'Sin camión'}</div>
-              <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>📅 {v.fecha}</div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
-                {v.estatus==='en_ruta'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
-                {['programado','en_ruta'].includes(v.estatus)&&<button style={{ ...btnY, padding: '8px 10px' }} onClick={() => cancelarViaje(v)}>✕</button>}
-                <button style={{ ...btnD, padding: '8px 12px' }} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button>
-              </div>
+              <div style={{ fontSize: 11, color: m, marginBottom: v.estatus === 'entregado' ? 0 : 10 }}>📅 {v.fecha}</div>
+              {v.estatus !== 'entregado' && v.estatus !== 'cancelado' && <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={e => { e.stopPropagation(); iniciarViaje(v) }}>▶ Iniciar</button>}
+                {v.estatus==='en_ruta'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={e => { e.stopPropagation(); setViajeEntrega(v) }}>📸 Entregar</button>}
+                {['programado','en_ruta'].includes(v.estatus)&&<button style={{ ...btnY, padding: '8px 10px' }} onClick={e => { e.stopPropagation(); cancelarViaje(v) }}>✕</button>}
+                <button style={{ ...btnD, padding: '8px 12px' }} onClick={e => { e.stopPropagation(); eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?') }}>🗑</button>
+              </div>}
             </div>
           })}</div>
         ) : (
@@ -464,19 +552,25 @@ export default function App({ usuario, rol, onLogout }) {
             <tbody>{vF.map(v=>{
               const chofer = choferes.find(c => c.id === v.chofer_id)
               const camion = camiones.find(c => c.id === v.camion_id)
-              return <tr key={v.id}>
+              return <tr key={v.id} style={{ cursor: v.estatus === 'entregado' ? 'pointer' : 'default' }} onClick={() => v.estatus === 'entregado' && setViajeDetalle(v)}>
                 <td style={{ ...td, fontWeight: 600 }}>{v.folio}</td><td style={td}>{v.cliente}</td><td style={td}>{v.origen}→{v.destino}</td>
                 <td style={td}>{chofer?.nombre || <span style={{ color: m }}>Sin asignar</span>}</td>
                 <td style={td}>{camion?.economico || <span style={{ color: m }}>—</span>}</td>
-                <td style={td}>{v.fecha}</td><td style={td}>{badge(v.estatus)}</td>
+                <td style={td}>{v.fecha}</td>
                 <td style={td}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {v.evidencia_url && <span style={{ fontSize: 11, color: '#3B6D11' }}>📸</span>}
+                    {badge(v.estatus)}
+                  </div>
+                </td>
+                <td style={td} onClick={e => e.stopPropagation()}>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {v.estatus==='programado'&&<button style={btnG} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
-                    {v.estatus==='en_ruta'&&<button style={btnR} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
+                    {v.estatus==='en_ruta'&&<button style={btnR} onClick={() => setViajeEntrega(v)}>📸 Entregar</button>}
                     {['programado','en_ruta'].includes(v.estatus)&&<button style={btnY} onClick={() => cancelarViaje(v)}>✕ Cancelar</button>}
                   </div>
                 </td>
-                <td style={td}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
+                <td style={td} onClick={e => e.stopPropagation()}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
               </tr>
             })}</tbody>
           </table></div>
@@ -603,6 +697,8 @@ export default function App({ usuario, rol, onLogout }) {
         <div style={{ padding: 12 }}>{mainContent}</div>
         {modalContent}
         {confirmarModal}
+        {entregaModal}
+        {detalleModal}
       </div>
     )
   }
@@ -651,6 +747,8 @@ export default function App({ usuario, rol, onLogout }) {
       </div>
       {modalContent}
       {confirmarModal}
+      {entregaModal}
+      {detalleModal}
     </div>
   )
 }
