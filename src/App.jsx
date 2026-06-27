@@ -17,9 +17,11 @@ export default function App({ usuario, rol, onLogout }) {
   const [loading, setLoading] = useState(false)
   const [filtroV, setFiltroV] = useState('todos')
   const [filtroF, setFiltroF] = useState('todas')
+  const [filtroChofer, setFiltroChofer] = useState('todos')
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const [menuOpen, setMenuOpen] = useState(false)
   const [historialChofer, setHistorialChofer] = useState(null)
+  const [archivoFactura, setArchivoFactura] = useState(null)
 
   useEffect(() => {
     load()
@@ -96,6 +98,12 @@ export default function App({ usuario, rol, onLogout }) {
     setLoading(false)
   }
 
+  async function cancelarViaje(v) {
+    await supabase.from('viajes').update({ estatus: 'cancelado' }).eq('id', v.id)
+    if (v.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
+    await load()
+  }
+
   async function entregarViaje(v) {
     await supabase.from('viajes').update({ estatus: 'entregado' }).eq('id', v.id)
     if (v.camion_id) await supabase.from('camiones').update({ estatus: 'disponible' }).eq('id', v.camion_id)
@@ -107,11 +115,37 @@ export default function App({ usuario, rol, onLogout }) {
     await load()
   }
 
+  async function crearFactura() {
+    setLoading(true)
+    try {
+      let archivo_url = null
+      if (archivoFactura) {
+        const ext = archivoFactura.name.split('.').pop()
+        const nombre = `factura-${Date.now()}.${ext}`
+        const { error: uploadError } = await supabase.storage
+          .from('facturas')
+          .upload(nombre, archivoFactura)
+        if (uploadError) throw uploadError
+        const { data: urlData } = supabase.storage.from('facturas').getPublicUrl(nombre)
+        archivo_url = urlData.publicUrl
+      }
+      await supabase.from('facturas').insert([{
+        ...form,
+        folio: 'FYS-' + String(facturas.length + 101).padStart(4, '0'),
+        estatus: 'pendiente',
+        archivo_url
+      }])
+      await load(); setModal(null); setForm({}); setArchivoFactura(null)
+    } catch (e) { alert('Error: ' + e.message) }
+    setLoading(false)
+  }
+
   const r = '#C8001E', w = '#fff', b = '#1a1a1a', m = '#6B6B68', br = '0.5px solid #E0DFDC'
   const card = { background: w, border: br, borderRadius: 12, padding: 14 }
   const btnR = { background: r, color: w, border: 'none', padding: '5px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
   const btnD = { background: '#FCEBEB', color: '#A32D2D', border: '0.5px solid #F09595', padding: '4px 10px', borderRadius: 8, fontSize: 11, cursor: 'pointer' }
   const btnG = { background: w, color: b, border: br, padding: '5px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
+  const btnY = { background: '#faeeda', color: '#854F0B', border: '0.5px solid #F0C070', padding: '4px 10px', borderRadius: 8, fontSize: 11, cursor: 'pointer' }
   const inp = { width: '100%', padding: '10px', border: br, borderRadius: 8, fontSize: 16, background: w, color: b, boxSizing: 'border-box', marginBottom: 10 }
   const th = { fontWeight: 500, color: m, textAlign: 'left', padding: '4px 8px', borderBottom: br, fontSize: 11 }
   const td = { padding: '7px 8px', borderBottom: br, fontSize: 12 }
@@ -124,7 +158,9 @@ export default function App({ usuario, rol, onLogout }) {
 
   const vAct = viajes.filter(v => ['en_ruta', 'cargando'].includes(v.estatus)).length
   const fPend = facturas.filter(f => f.estatus === 'pendiente')
-  const vF = filtroV === 'todos' ? viajes : viajes.filter(v => v.estatus === filtroV)
+  const vF = viajes
+    .filter(v => filtroV === 'todos' || v.estatus === filtroV)
+    .filter(v => filtroChofer === 'todos' || v.chofer_id === filtroChofer)
   const fF = filtroF === 'todas' ? facturas : facturas.filter(f => f.estatus === filtroF)
   const totalGas = gasolina.reduce((a, g) => a + Number(g.monto || 0), 0)
   const viewTitle = { inicio: 'Inicio', flota: 'Flota', choferes: 'Choferes', viajes: 'Viajes', gasolina: 'Gasolina', facturas: 'Facturas', mantenimiento: 'Mantenimiento', reportes: 'Reportes' }
@@ -199,11 +235,14 @@ export default function App({ usuario, rol, onLogout }) {
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Nueva factura</div>
           {[['cliente','Cliente','text'],['monto','Monto','number'],['fecha','Fecha emisión','date'],['fecha_vence','Fecha vencimiento','date']].map(([k,l,t]) =>
             <div key={k}><label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>{l}</label><input style={inp} type={t} onChange={e => setForm({ ...form, [k]: e.target.value })} /></div>)}
-          <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={async () => {
-            setLoading(true)
-            await supabase.from('facturas').insert([{ ...form, folio: 'FYS-' + String(facturas.length + 101).padStart(4, '0'), estatus: 'pendiente' }])
-            await load(); setModal(null); setForm({}); setLoading(false)
-          }}>{loading ? 'Guardando...' : '✓ Guardar'}</button>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 12, color: m, display: 'block', marginBottom: 4 }}>📎 Adjuntar archivo (PDF o imagen)</label>
+            <input type="file" accept="image/*,.pdf" style={{ fontSize: 13, width: '100%' }} onChange={e => setArchivoFactura(e.target.files[0])} />
+            {archivoFactura && <div style={{ fontSize: 11, color: '#3B6D11', marginTop: 4 }}>✓ {archivoFactura.name}</div>}
+          </div>
+          <button style={{ ...btnR, width: '100%', padding: 12, fontSize: 14, marginTop: 4 }} onClick={crearFactura}>
+            {loading ? 'Guardando...' : '✓ Guardar'}
+          </button>
         </>}
 
         {modal === 'historial' && historialChofer && <>
@@ -398,8 +437,14 @@ export default function App({ usuario, rol, onLogout }) {
       </div>}
 
       {view === 'viajes' && <>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
           {['todos','programado','en_ruta','entregado','cancelado'].map(f=><button key={f} onClick={()=>setFiltroV(f)} style={{ padding: '6px 12px', borderRadius: 20, fontSize: 11, cursor: 'pointer', background: filtroV===f?r:w, color: filtroV===f?w:m, border: filtroV===f?'1px solid '+r:br }}>{f==='todos'?'Todos':f==='en_ruta'?'En ruta':f.charAt(0).toUpperCase()+f.slice(1)}</button>)}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          <select style={{ padding: '6px 10px', borderRadius: 8, fontSize: 11, border: br, background: w, color: b }} value={filtroChofer} onChange={e => setFiltroChofer(e.target.value)}>
+            <option value="todos">Todos los choferes</option>
+            {choferes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
         </div>
         {isMobile ? (
           <div>{vF.map(v => {
@@ -415,6 +460,7 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ display: 'flex', gap: 6 }}>
                 {v.estatus==='programado'&&<button style={{ ...btnG, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
                 {v.estatus==='en_ruta'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
+                {['programado','en_ruta'].includes(v.estatus)&&<button style={{ ...btnY, padding: '8px 10px' }} onClick={() => cancelarViaje(v)}>✕</button>}
                 <button style={{ ...btnD, padding: '8px 12px' }} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button>
               </div>
             </div>
@@ -429,8 +475,11 @@ export default function App({ usuario, rol, onLogout }) {
                 <td style={td}>{chofer?.nombre || <span style={{ color: m }}>Sin asignar</span>}</td>
                 <td style={td}>{v.fecha}</td><td style={td}>{badge(v.estatus)}</td>
                 <td style={td}>
-                  {v.estatus==='programado'&&<button style={btnG} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
-                  {v.estatus==='en_ruta'&&<button style={btnR} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {v.estatus==='programado'&&<button style={btnG} onClick={() => iniciarViaje(v)}>▶ Iniciar</button>}
+                    {v.estatus==='en_ruta'&&<button style={btnR} onClick={() => entregarViaje(v)}>✓ Entregar</button>}
+                    {['programado','en_ruta'].includes(v.estatus)&&<button style={btnY} onClick={() => cancelarViaje(v)}>✕ Cancelar</button>}
+                  </div>
                 </td>
                 <td style={td}><button style={btnD} onClick={()=>eliminar('viajes',v.id,'¿Eliminar '+v.folio+'?')}>🗑</button></td>
               </tr>
@@ -450,7 +499,8 @@ export default function App({ usuario, rol, onLogout }) {
             </div>
             <div style={{ fontSize: 12, marginBottom: 3 }}>🏢 {f.cliente}</div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>${Number(f.monto||0).toLocaleString()}</div>
-            <div style={{ fontSize: 11, color: m, marginBottom: 10 }}>Vence: {f.fecha_vence}</div>
+            <div style={{ fontSize: 11, color: m, marginBottom: 8 }}>Vence: {f.fecha_vence}</div>
+            {f.archivo_url && <a href={f.archivo_url} target="_blank" rel="noreferrer" style={{ display: 'block', fontSize: 11, color: r, marginBottom: 8 }}>📎 Ver archivo</a>}
             <div style={{ display: 'flex', gap: 6 }}>
               {f.estatus==='pendiente'&&<button style={{ ...btnR, flex: 1, textAlign: 'center', padding: 8 }} onClick={async()=>{ await supabase.from('facturas').update({estatus:'cobrada'}).eq('id',f.id); await load() }}>✓ Cobrar</button>}
               <button style={{ ...btnD, padding: '8px 12px' }} onClick={()=>eliminar('facturas',f.id,'¿Eliminar '+f.folio+'?')}>🗑</button>
@@ -458,10 +508,14 @@ export default function App({ usuario, rol, onLogout }) {
           </div>)}</div>
         ) : (
           <div style={card}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead><tr><th style={th}>Folio</th><th style={th}>Cliente</th><th style={th}>Fecha</th><th style={th}>Monto</th><th style={th}>Vence</th><th style={th}>Estatus</th><th style={th}></th></tr></thead>
+            <thead><tr><th style={th}>Folio</th><th style={th}>Cliente</th><th style={th}>Fecha</th><th style={th}>Monto</th><th style={th}>Vence</th><th style={th}>Estatus</th><th style={th}>Archivo</th><th style={th}></th></tr></thead>
             <tbody>{fF.map(f=><tr key={f.id}>
               <td style={{ ...td, fontWeight: 600 }}>{f.folio}</td><td style={td}>{f.cliente}</td><td style={td}>{f.fecha}</td><td style={{ ...td, fontWeight: 600 }}>${Number(f.monto||0).toLocaleString()}</td><td style={td}>{f.fecha_vence}</td><td style={td}>{badge(f.estatus)}</td>
-              <td style={td}>{f.estatus==='pendiente'&&<button style={{ ...btnR, fontSize: 10, padding: '3px 8px', marginRight: 4 }} onClick={async()=>{ await supabase.from('facturas').update({estatus:'cobrada'}).eq('id',f.id); await load() }}>✓ Cobrar</button>}<button style={btnD} onClick={()=>eliminar('facturas',f.id,'¿Eliminar '+f.folio+'?')}>🗑</button></td>
+              <td style={td}>{f.archivo_url ? <a href={f.archivo_url} target="_blank" rel="noreferrer" style={{ color: r, fontSize: 11 }}>📎 Ver</a> : <span style={{ color: m, fontSize: 11 }}>—</span>}</td>
+              <td style={td}>
+                {f.estatus==='pendiente'&&<button style={{ ...btnR, fontSize: 10, padding: '3px 8px', marginRight: 4 }} onClick={async()=>{ await supabase.from('facturas').update({estatus:'cobrada'}).eq('id',f.id); await load() }}>✓ Cobrar</button>}
+                <button style={btnD} onClick={()=>eliminar('facturas',f.id,'¿Eliminar '+f.folio+'?')}>🗑</button>
+              </td>
             </tr>)}</tbody>
           </table></div>
         )}
