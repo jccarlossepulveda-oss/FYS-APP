@@ -19,6 +19,7 @@ export default function App({ usuario, rol, onLogout }) {
   const [filtroF, setFiltroF] = useState('todas')
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [historialChofer, setHistorialChofer] = useState(null)
 
   useEffect(() => {
     load()
@@ -82,28 +83,14 @@ export default function App({ usuario, rol, onLogout }) {
   async function crearViaje() {
     setLoading(true)
     try {
-      // Verificar que el camión no tenga viaje activo
       if (form.camion_id) {
         const { data: viajeActivo } = await supabase
-          .from('viajes')
-          .select('id')
-          .eq('camion_id', form.camion_id)
-          .in('estatus', ['programado', 'en_ruta', 'cargando'])
-          .maybeSingle()
-        if (viajeActivo) {
-          alert('⚠️ Este camión ya tiene un viaje activo')
-          setLoading(false)
-          return
-        }
+          .from('viajes').select('id').eq('camion_id', form.camion_id)
+          .in('estatus', ['programado', 'en_ruta', 'cargando']).maybeSingle()
+        if (viajeActivo) { alert('⚠️ Este camión ya tiene un viaje activo'); setLoading(false); return }
       }
-      await supabase.from('viajes').insert([{
-        ...form,
-        folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'),
-        estatus: 'programado'
-      }])
-      if (form.camion_id) {
-        await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', form.camion_id)
-      }
+      await supabase.from('viajes').insert([{ ...form, folio: 'VJ-' + String(viajes.length + 1).padStart(3, '0'), estatus: 'programado' }])
+      if (form.camion_id) await supabase.from('camiones').update({ estatus: 'en_ruta' }).eq('id', form.camion_id)
       await load(); setModal(null); setForm({})
     } catch (e) { alert('Error: ' + e.message) }
     setLoading(false)
@@ -217,6 +204,26 @@ export default function App({ usuario, rol, onLogout }) {
             await supabase.from('facturas').insert([{ ...form, folio: 'FYS-' + String(facturas.length + 101).padStart(4, '0'), estatus: 'pendiente' }])
             await load(); setModal(null); setForm({}); setLoading(false)
           }}>{loading ? 'Guardando...' : '✓ Guardar'}</button>
+        </>}
+
+        {modal === 'historial' && historialChofer && <>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>📋 Historial de {historialChofer.nombre}</div>
+          <div style={{ fontSize: 11, color: m, marginBottom: 16 }}>
+            {viajes.filter(v => v.chofer_id === historialChofer.id).length} viajes en total
+          </div>
+          {viajes.filter(v => v.chofer_id === historialChofer.id).length === 0 && (
+            <div style={{ textAlign: 'center', color: m, padding: 20 }}>Sin viajes registrados</div>
+          )}
+          {viajes.filter(v => v.chofer_id === historialChofer.id).map(v => (
+            <div key={v.id} style={{ borderBottom: br, paddingBottom: 10, marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: 12 }}>{v.folio}</span>{badge(v.estatus)}
+              </div>
+              <div style={{ fontSize: 12, marginBottom: 2 }}>📦 {v.cliente}</div>
+              <div style={{ fontSize: 11, color: m, marginBottom: 2 }}>📍 {v.origen} → {v.destino}</div>
+              <div style={{ fontSize: 11, color: m }}>📅 {v.fecha}</div>
+            </div>
+          ))}
         </>}
       </div>
     </div>
@@ -353,8 +360,14 @@ export default function App({ usuario, rol, onLogout }) {
       {view === 'choferes' && <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3,minmax(0,1fr))', gap: 10 }}>
         {choferes.map(c => {
           const dias = c.licencia_vence ? Math.round((new Date(c.licencia_vence)-new Date())/864e5) : 999
+          const viajesChofer = viajes.filter(v => v.chofer_id === c.id)
+          const entregados = viajesChofer.filter(v => v.estatus === 'entregado').length
+          const activo = viajesChofer.find(v => ['programado','en_ruta'].includes(v.estatus))
           return <div key={c.id} style={{ ...card, padding: 12 }}>
-            <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#fff0f2', color: r, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{c.nombre.split(' ').map(n=>n[0]).slice(0,2).join('')}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+              <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#fff0f2', color: r, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13 }}>{c.nombre.split(' ').map(n=>n[0]).slice(0,2).join('')}</div>
+              {activo && badge(activo.estatus)}
+            </div>
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{c.nombre}</div>
             <div style={{ fontSize: 11, color: m, marginBottom: 6 }}>{c.licencia}</div>
             <div style={{ fontSize: 11, color: m, marginBottom: 8 }}>
@@ -362,7 +375,24 @@ export default function App({ usuario, rol, onLogout }) {
               <div style={{ color: dias<60?'#854F0B':m }}>🪪 {c.licencia_vence||'—'}{dias<60?' ⚠️':''}</div>
               <div style={{ marginTop: 4, color: c.user_id ? '#3B6D11' : '#854F0B' }}>{c.user_id ? '🔗 Cuenta vinculada' : '⚠️ Sin cuenta'}</div>
             </div>
-            <button style={{ ...btnD, width: '100%', textAlign: 'center', padding: 10 }} onClick={() => eliminar('choferes', c.id, '¿Eliminar a '+c.nombre+'?')}>🗑 Eliminar</button>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8, background: '#F7F7F6', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>{viajesChofer.length}</div>
+                <div style={{ fontSize: 10, color: m }}>Total</div>
+              </div>
+              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: '#3B6D11' }}>{entregados}</div>
+                <div style={{ fontSize: 10, color: m }}>Entregados</div>
+              </div>
+              <div style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: viajesChofer.length - entregados > 0 ? '#854F0B' : m }}>{viajesChofer.length - entregados}</div>
+                <div style={{ fontSize: 10, color: m }}>Activos</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button style={{ ...btnG, flex: 1, textAlign: 'center', fontSize: 11 }} onClick={() => { setHistorialChofer(c); setModal('historial') }}>📋 Historial</button>
+              <button style={{ ...btnD, fontSize: 11 }} onClick={() => eliminar('choferes', c.id, '¿Eliminar a '+c.nombre+'?')}>🗑</button>
+            </div>
           </div>
         })}
       </div>}
@@ -468,7 +498,7 @@ export default function App({ usuario, rol, onLogout }) {
     </div>
   )
 
-  // ─── LAYOUT MÓVIL CON HAMBURGUESA ───────────────────────────────────────────
+  // ─── LAYOUT MÓVIL ───────────────────────────────────────────────────────────
   if (isMobile) {
     return (
       <div style={{ minHeight: '100vh', background: '#F7F7F6', fontFamily: 'system-ui,sans-serif', fontSize: 13, color: b }}>
